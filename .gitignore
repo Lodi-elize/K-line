@@ -1,0 +1,16 @@
+K-line-back/.venv/
+K-line-back/data/
+K-line-back/**/__pycache__/
+K-line-back/.pytest_cache/
+
+K-line-web/node_modules/
+K-line-web/dist/
+K-line-web/tsconfig.tsbuildinfo
+
+# Local AI assistant / agent runtime state
+.omx/
+.codex/
+.agents/
+.aider*
+.continue/
+.cursor/
