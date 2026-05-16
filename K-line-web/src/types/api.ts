@@ -2,7 +2,7 @@ export type StockModule = {
   id?: number;
   module_key?: string;
   name: string;
-  type: "market" | "industry" | "concept" | "signal" | "custom" | string;
+  type: "market" | "chain" | "industry" | "concept" | "signal" | "custom" | string;
   description?: string;
   source: string;
   stock_count?: number;

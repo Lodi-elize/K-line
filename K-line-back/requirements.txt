@@ -7,3 +7,4 @@ akshare==1.17.93
 pytest==8.4.1
 httpx==0.25.2
 PyMySQL==1.1.1
+tzdata==2025.2

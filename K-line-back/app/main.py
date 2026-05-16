@@ -22,6 +22,7 @@ from app.services.storage import Storage
 
 storage = Storage(settings.database_path, settings.database_url)
 storage.mark_interrupted_scans()
+storage.backfill_chain_modules_from_concepts()
 engine = SignalEngine(settings.thresholds)
 
 
@@ -118,12 +119,13 @@ def sync_concept_modules() -> None:
             )
 
         members = board.concept_members(update_progress)
+        backfilled_count = storage.backfill_chain_modules_from_concepts()
         update_module_sync_state(
             {
                 "status": "success",
                 "finished_at": beijing_timestamp(),
                 "updated_count": len(members),
-                "message": f"概念模块同步完成，更新 {len(members)} 条归属关系。",
+                "message": f"概念模块同步完成，更新 {len(members)} 条归属关系，回填 {backfilled_count} 条产业链关系。",
             }
         )
     except Exception as exc:

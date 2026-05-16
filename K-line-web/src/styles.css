@@ -620,6 +620,12 @@ button.signal-row:hover,
   color: #0f766e;
 }
 
+.module-cell .module-chain {
+  background: #fefce8;
+  border-color: #fde68a;
+  color: #a16207;
+}
+
 .module-cell .module-concept {
   background: #fff7ed;
   border-color: #fed7aa;

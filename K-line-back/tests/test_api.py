@@ -73,8 +73,26 @@ def test_storage_normalizes_kline_ohlc(tmp_path) -> None:
 def test_storage_replaces_akshare_concept_modules(tmp_path) -> None:
     storage = Storage(tmp_path / "test.db")
     storage.upsert_stocks([{"symbol": "600001", "name": "样例股份"}])
-    storage.replace_concept_modules([("600001", "人工智能")])
+    storage.upsert_concept_modules([("600001", "CPO概念"), ("600001", "半导体概念")])
 
     modules = storage.modules_for_symbols(["600001"])["600001"]
-    assert any(module["type"] == "concept" and module["name"] == "人工智能" for module in modules)
+    assert any(module["type"] == "concept" and module["name"] == "CPO概念" for module in modules)
+    assert any(module["type"] == "chain" and module["name"] == "CPO产业链" for module in modules)
+    assert any(module["type"] == "chain" and module["name"] == "AI算力产业链" for module in modules)
+    assert any(module["type"] == "chain" and module["name"] == "半导体产业链" for module in modules)
     assert not any(module["type"] == "signal" for module in modules)
+
+
+def test_storage_backfills_chain_modules_from_existing_concepts(tmp_path) -> None:
+    storage = Storage(tmp_path / "test.db")
+    storage.upsert_stocks([{"symbol": "600001", "name": "样例股份"}])
+    storage.upsert_concept_modules([("600001", "创新药概念")])
+
+    with storage.connect() as db:
+        db.execute("delete from stock_module_members where module_id in (select id from modules where type = 'chain')")
+        db.execute("delete from modules where type = 'chain'")
+
+    assert storage.backfill_chain_modules_from_concepts() > 0
+
+    modules = storage.modules_for_symbols(["600001"])["600001"]
+    assert any(module["type"] == "chain" and module["name"] == "创新药产业链" for module in modules)

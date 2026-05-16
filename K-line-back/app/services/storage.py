@@ -58,6 +58,30 @@ def _module_key(module_type: str, name: str) -> str:
     return f"{module_type}:{name}"
 
 
+CHAIN_RULES: list[tuple[str, tuple[str, ...]]] = [
+    ("CPO产业链", ("CPO", "光模块", "光通信", "光芯片", "硅光", "光纤", "铜缆高速连接", "F5G")),
+    ("创新药产业链", ("创新药", "CRO", "CXO", "细胞免疫治疗", "减肥药", "合成生物", "仿制药", "生物医药", "重组蛋白")),
+    ("半导体产业链", ("半导体", "芯片", "集成电路", "光刻", "存储", "先进封装", "第三代半导体", "功率半导体", "晶圆", "封测")),
+    ("AI算力产业链", ("CPO", "光模块", "算力", "液冷", "服务器", "数据中心", "东数西算", "英伟达", "华为昇腾", "GPU", "AI芯片")),
+    ("人工智能产业链", ("人工智能", "AI", "大模型", "DeepSeek", "机器人", "机器视觉", "智能体", "AIGC")),
+    ("消费电子产业链", ("消费电子", "AI手机", "AI PC", "苹果", "华为手机", "智能穿戴", "MR", "VR", "AR")),
+    ("新能源汽车产业链", ("新能源汽车", "锂电", "电池", "固态电池", "充电桩", "汽车电子", "无人驾驶", "一体化压铸")),
+    ("光伏储能产业链", ("光伏", "储能", "逆变器", "HJT", "TOPCon", "钙钛矿", "风电")),
+    ("低空经济产业链", ("低空经济", "飞行汽车", "无人机", "eVTOL", "通用航空")),
+    ("军工航天产业链", ("军工", "航天", "卫星", "商业航天", "北斗", "大飞机")),
+    ("医药生物产业链", ("医药", "创新药", "中药", "医疗器械", "CRO", "减肥药", "阿尔茨海默")),
+    ("金融科技产业链", ("金融科技", "互联网金融", "数字货币", "跨境支付", "券商", "银行")),
+]
+
+
+def _chain_modules_for_board(board_name: str) -> list[str]:
+    return [chain_name for chain_name, keywords in CHAIN_RULES if any(keyword.lower() in board_name.lower() for keyword in keywords)]
+
+
+def _chain_description() -> str:
+    return "按概念关键词自动归入的产业链模块。"
+
+
 class Row(dict[str, Any]):
     def __getattr__(self, key: str) -> Any:
         try:
@@ -443,11 +467,24 @@ class Storage:
         if not normalized:
             return
         concept_names = sorted({board_name for _, board_name in normalized})
+        chain_members = sorted(
+            {
+                (symbol, chain_name)
+                for symbol, board_name in normalized
+                for chain_name in _chain_modules_for_board(board_name)
+            }
+        )
+        chain_names = sorted({chain_name for _, chain_name in chain_members})
         with self.connect() as db:
             db.executemany(
                 self._upsert_modules_sql("values(?, ?, 'concept', '同花顺概念板块。', ?)"),
                 [(_module_key("concept", name), name, source) for name in concept_names],
             )
+            if chain_names:
+                db.executemany(
+                    self._upsert_modules_sql("values(?, ?, 'chain', ?, 'system')"),
+                    [(_module_key("chain", name), name, _chain_description()) for name in chain_names],
+                )
             module_rows = db.execute(
                 f"select id, name from modules where type = 'concept' and source = ? and name in ({','.join('?' for _ in concept_names)})",
                 [source, *concept_names],
@@ -461,6 +498,60 @@ class Storage:
                     if board_name in module_by_name
                 ],
             )
+            if chain_names:
+                chain_rows = db.execute(
+                    f"select id, name from modules where type = 'chain' and name in ({','.join('?' for _ in chain_names)})",
+                    chain_names,
+                ).fetchall()
+                chain_by_name = {row["name"]: row["id"] for row in chain_rows}
+                db.executemany(
+                    self._upsert_members_sql(),
+                    [
+                        (symbol, chain_by_name[chain_name], f"由同花顺概念自动归入：{chain_name}", timestamp)
+                        for symbol, chain_name in chain_members
+                        if chain_name in chain_by_name
+                    ],
+                )
+
+    def backfill_chain_modules_from_concepts(self) -> int:
+        timestamp = _beijing_timestamp()
+        with self.connect() as db:
+            concept_rows = db.execute(
+                """
+                select member.symbol, module.name as board_name
+                from stock_module_members member
+                join modules module on module.id = member.module_id
+                where module.type = 'concept'
+                """
+            ).fetchall()
+            chain_members = sorted(
+                {
+                    (row["symbol"], chain_name)
+                    for row in concept_rows
+                    for chain_name in _chain_modules_for_board(row["board_name"])
+                }
+            )
+            if not chain_members:
+                return 0
+            chain_names = sorted({chain_name for _, chain_name in chain_members})
+            db.executemany(
+                self._upsert_modules_sql("values(?, ?, 'chain', ?, 'system')"),
+                [(_module_key("chain", name), name, _chain_description()) for name in chain_names],
+            )
+            chain_rows = db.execute(
+                f"select id, name from modules where type = 'chain' and name in ({','.join('?' for _ in chain_names)})",
+                chain_names,
+            ).fetchall()
+            chain_by_name = {row["name"]: row["id"] for row in chain_rows}
+            db.executemany(
+                self._upsert_members_sql(),
+                [
+                    (symbol, chain_by_name[chain_name], f"由历史概念模块回填：{chain_name}", timestamp)
+                    for symbol, chain_name in chain_members
+                    if chain_name in chain_by_name
+                ],
+            )
+            return len(chain_members)
 
     def upsert_klines(self, rows: list[KLine]) -> None:
         normalized_rows = [item for row in rows if (item := _normalized_kline(row)) is not None]
@@ -615,16 +706,18 @@ class Storage:
                     module.type,
                     module.description,
                     module.source,
-                    count(member.symbol) as stock_count
+                    count(stocks.symbol) as stock_count
                 from modules module
                 left join stock_module_members member on member.module_id = module.id
+                left join stocks on stocks.symbol = member.symbol
                 group by module.id, module.module_key, module.name, module.type, module.description, module.source
                 order by
                     case module.type
                         when 'market' then 1
-                        when 'industry' then 2
-                        when 'concept' then 3
-                        when 'custom' then 4
+                        when 'chain' then 2
+                        when 'industry' then 3
+                        when 'concept' then 4
+                        when 'custom' then 5
                         else 9
                     end,
                     module.name
@@ -646,9 +739,10 @@ class Storage:
                 order by
                     case module.type
                         when 'market' then 1
-                        when 'industry' then 2
-                        when 'concept' then 3
-                        when 'custom' then 4
+                        when 'chain' then 2
+                        when 'industry' then 3
+                        when 'concept' then 4
+                        when 'custom' then 5
                         else 9
                     end,
                     module.name

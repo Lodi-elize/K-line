@@ -7,6 +7,10 @@ K-line-web/node_modules/
 K-line-web/dist/
 K-line-web/tsconfig.tsbuildinfo
 
+.env
+.env.*
+!.env.example
+
 # Local AI assistant / agent runtime state
 .omx/
 .codex/

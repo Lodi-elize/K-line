@@ -25,6 +25,7 @@ function formatUpdatedAt(value?: string) {
 function moduleTypeLabel(type: string) {
   const labels: Record<string, string> = {
     market: "市场",
+    chain: "产业链",
     industry: "行业",
     concept: "概念",
     custom: "自定义",
