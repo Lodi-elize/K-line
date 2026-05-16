@@ -43,7 +43,7 @@ def test_detects_death_and_bearish_alignment() -> None:
 
 def test_detects_five_ma_pullback_hold() -> None:
     rows = make_rows([10, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2, 11.4, 11.6, 11.8, 12.0, 12.2, 12.1])
-    rows[-1] = KLine("600001", rows[-1].date, 12.0, 12.28, 11.95, 12.24, 1000)
+    rows[-1] = KLine("600001", rows[-1].date, 12.0, 12.28, 11.96, 12.24, 1000)
     found = signal_types(rows)
     assert SignalType.FIVE_MA_PULLBACK_HOLD in found
 

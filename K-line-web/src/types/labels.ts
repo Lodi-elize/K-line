@@ -4,7 +4,8 @@ export const severityLabel: Record<Signal["severity"], string> = {
   entry: "进场",
   watch: "观察",
   risk: "风险",
-  exit: "离场"
+  exit: "离场",
+  normal: "通常"
 };
 
 export const signalTypeLabel: Record<string, string> = {

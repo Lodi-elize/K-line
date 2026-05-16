@@ -1,15 +1,29 @@
+export type StockModule = {
+  id?: number;
+  module_key?: string;
+  name: string;
+  type: "market" | "industry" | "concept" | "signal" | "custom" | string;
+  description?: string;
+  source: string;
+  stock_count?: number;
+  score?: number | null;
+  reason?: string;
+};
+
 export type Signal = {
   id?: number;
   symbol: string;
+  name?: string;
   trade_date: string;
   signal_type: string;
-  severity: "entry" | "watch" | "risk" | "exit";
+  severity: "entry" | "watch" | "risk" | "exit" | "normal";
   title: string;
   description: string;
-  close: number;
+  close?: number | null;
   ma5?: number | null;
   ma10?: number | null;
   ma20?: number | null;
+  modules?: StockModule[];
 };
 
 export type KLineBar = {
@@ -24,7 +38,7 @@ export type KLineBar = {
   ma20?: number | null;
   signals: Array<{
     signal_type: string;
-    severity: Signal["severity"];
+    severity: "entry" | "watch" | "risk" | "exit";
     title: string;
     description: string;
   }>;
@@ -32,6 +46,7 @@ export type KLineBar = {
 
 export type HistoryResponse = {
   symbol: string;
+  name?: string;
   bars: KLineBar[];
 };
 
@@ -47,6 +62,14 @@ export type ScanStatus = {
   status: string;
   scanned_count: number;
   signal_count: number;
+  message?: string;
+};
+
+export type ModuleSyncStatus = {
+  status: "idle" | "running" | "success" | "failed" | string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_count: number;
   message?: string;
 };
 

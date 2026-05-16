@@ -1,4 +1,4 @@
-import type { ConfigItem, HistoryResponse, ScanStatus, Signal, Stock } from "../types/api";
+import type { ConfigItem, HistoryResponse, ModuleSyncStatus, ScanStatus, Signal, Stock, StockModule } from "../types/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -14,6 +14,10 @@ export const api = {
   scanStatus: () => request<ScanStatus | null>("/api/scan/status"),
   runScan: () => request<{ status: string; scanned_count: number; signal_count: number; message: string }>("/api/scan/run", { method: "POST" }),
   signals: (params: URLSearchParams) => request<Signal[]>(`/api/signals?${params.toString()}`),
+  stockStatuses: (params: URLSearchParams) => request<Signal[]>(`/api/stock-statuses?${params.toString()}`),
+  modules: () => request<StockModule[]>("/api/modules"),
+  moduleSyncStatus: () => request<ModuleSyncStatus>("/api/modules/sync/status"),
+  runModuleSync: () => request<ModuleSyncStatus>("/api/modules/sync", { method: "POST" }),
   stocks: (q: string) => request<Stock[]>(`/api/stocks?q=${encodeURIComponent(q)}`),
   history: (symbol: string) => request<HistoryResponse>(`/api/stocks/${symbol}/history`)
 };

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,7 +13,7 @@ class SignalThresholds:
 
     # Allowed intraday pierce below an MA during a "pullback hold" check.
     # Unit: decimal ratio of MA value. Lower values reject more noisy pullbacks.
-    break_tolerance_pct: float = 0.002
+    break_tolerance_pct: float = 0.001
 
     # Minimum MA slope over the lookback window to call the line "turning upward".
     # Unit: decimal ratio. Higher values require stronger upward movement and reduce entry signals.
@@ -92,8 +93,10 @@ class SignalThresholds:
 class Settings:
     app_name: str = "K-line MA Signal Scanner"
     database_path: Path = Path("data/kline.db")
+    database_url: str | None = os.getenv("KLINE_DATABASE_URL") or None
     scan_cron: str = "0 18 * * 1-5"
     max_scan_symbols: int | None = None
+    sync_concept_modules: bool = (os.getenv("KLINE_SYNC_CONCEPTS") or "").lower() in {"1", "true", "yes", "on"}
     thresholds: SignalThresholds = field(default_factory=SignalThresholds)
 
 
