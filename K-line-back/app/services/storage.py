@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from app.core.models import AnnotatedBar, KLine, Signal
+from app.core.stock_scope import is_mainland_hs_symbol, normalize_mainland_hs_symbol
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -43,10 +44,8 @@ def _clean_stock_name(value: str | None, fallback: str) -> str:
 def _market_module(symbol: str) -> str:
     if symbol.startswith("688"):
         return "科创板"
-    if symbol.startswith("300"):
+    if symbol.startswith("3"):
         return "创业板"
-    if symbol.startswith("8"):
-        return "北交所"
     if symbol.startswith("6"):
         return "沪市主板"
     if symbol.startswith("0"):
@@ -190,6 +189,18 @@ class Storage:
     def _insert_ignore(self) -> str:
         return "insert or ignore" if self.dialect == "sqlite" else "insert ignore"
 
+    @property
+    def _hs_symbol_clause(self) -> str:
+        return "(symbol like '0%%' or symbol like '3%%' or symbol like '6%%')"
+
+    @property
+    def _member_hs_symbol_clause(self) -> str:
+        return "(member.symbol like '0%%' or member.symbol like '3%%' or member.symbol like '6%%')"
+
+    @property
+    def _stocks_hs_symbol_clause(self) -> str:
+        return "(stocks.symbol like '0%%' or stocks.symbol like '3%%' or stocks.symbol like '6%%')"
+
     def _upsert_stocks_sql(self) -> str:
         if self.dialect == "sqlite":
             return "insert or replace into stocks(symbol, name) values(?, ?)"
@@ -252,6 +263,33 @@ class Storage:
                 low = values(low),
                 close = values(close),
                 volume = values(volume)
+        """
+
+    def _upsert_signals_sql(self) -> str:
+        if self.dialect == "sqlite":
+            return """
+                insert into signals(symbol, trade_date, signal_type, severity, title, description, close, ma5, ma10, ma20)
+                values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(symbol, trade_date, signal_type) do update set
+                    severity = excluded.severity,
+                    title = excluded.title,
+                    description = excluded.description,
+                    close = excluded.close,
+                    ma5 = excluded.ma5,
+                    ma10 = excluded.ma10,
+                    ma20 = excluded.ma20
+            """
+        return """
+            insert into signals(symbol, trade_date, signal_type, severity, title, description, close, ma5, ma10, ma20)
+            values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on duplicate key update
+                severity = values(severity),
+                title = values(title),
+                description = values(description),
+                close = values(close),
+                ma5 = values(ma5),
+                ma10 = values(ma10),
+                ma20 = values(ma20)
         """
 
     def _init_schema(self) -> None:
@@ -344,17 +382,43 @@ class Storage:
             except Exception:
                 continue
 
+    def prune_non_hs_stocks(self) -> int:
+        with self.connect() as db:
+            rows = db.execute(f"select symbol from stocks where not {self._hs_symbol_clause}").fetchall()
+            symbols = [row["symbol"] for row in rows]
+            if not symbols:
+                return 0
+            placeholders = ",".join("?" for _ in symbols)
+            db.execute(f"delete from stock_module_members where symbol in ({placeholders})", symbols)
+            db.execute(f"delete from signals where symbol in ({placeholders})", symbols)
+            db.execute(f"delete from klines where symbol in ({placeholders})", symbols)
+            db.execute(f"delete from stocks where symbol in ({placeholders})", symbols)
+            self._delete_empty_modules(db)
+            return len(symbols)
+
+    def _delete_empty_modules(self, db: StorageConnection) -> None:
+        db.execute(
+            """
+            delete from modules
+            where id not in (select distinct module_id from stock_module_members)
+            """
+        )
+
     def upsert_stocks(self, stocks: list[dict[str, str]]) -> None:
         rows = [
-            (row["symbol"], _clean_stock_name(row.get("name"), row["symbol"]))
+            (symbol, _clean_stock_name(row.get("name"), symbol))
             for row in stocks
-            if row.get("symbol")
+            if (symbol := normalize_mainland_hs_symbol(row.get("symbol")))
         ]
         with self.connect() as db:
             db.executemany(self._upsert_stocks_sql(), rows)
         self.sync_market_modules_for_symbols([symbol for symbol, _ in rows])
 
     def set_stock_modules(self, symbol: str, modules: list[tuple[str, str, str]], source: str = "system") -> None:
+        normalized_symbol = normalize_mainland_hs_symbol(symbol)
+        if normalized_symbol is None:
+            return
+        symbol = normalized_symbol
         timestamp = _beijing_timestamp()
         keys = [_module_key(module_type, name) for module_type, name, _ in modules]
         with self.connect() as db:
@@ -391,6 +455,9 @@ class Storage:
         )
 
     def sync_market_modules_for_symbols(self, symbols: list[str]) -> None:
+        if not symbols:
+            return
+        symbols = [symbol for raw_symbol in symbols if (symbol := normalize_mainland_hs_symbol(raw_symbol))]
         if not symbols:
             return
         timestamp = _beijing_timestamp()
@@ -431,10 +498,18 @@ class Storage:
                     if key in module_by_key
                 ],
             )
+            self._delete_empty_modules(db)
+
+    def sync_market_modules_for_all_stocks(self) -> int:
+        with self.connect() as db:
+            rows = db.execute(f"select symbol from stocks where {self._hs_symbol_clause}").fetchall()
+        symbols = [row["symbol"] for row in rows]
+        self.sync_market_modules_for_symbols(symbols)
+        return len(symbols)
 
     def replace_concept_modules(self, members: list[tuple[str, str]]) -> None:
         timestamp = _beijing_timestamp()
-        normalized = [(symbol, board_name.strip()) for symbol, board_name in members if symbol and board_name.strip()]
+        normalized = [(normalized_symbol, board_name.strip()) for symbol, board_name in members if (normalized_symbol := normalize_mainland_hs_symbol(symbol)) and board_name.strip()]
         with self.connect() as db:
             db.execute("delete from stock_module_members where module_id in (select id from modules where source = 'akshare' and type = 'concept')")
             if not normalized:
@@ -463,7 +538,7 @@ class Storage:
 
     def upsert_concept_modules(self, members: list[tuple[str, str]], source: str = "akshare") -> None:
         timestamp = _beijing_timestamp()
-        normalized = [(symbol, board_name.strip()) for symbol, board_name in members if symbol and board_name.strip()]
+        normalized = [(normalized_symbol, board_name.strip()) for symbol, board_name in members if (normalized_symbol := normalize_mainland_hs_symbol(symbol)) and board_name.strip()]
         if not normalized:
             return
         concept_names = sorted({board_name for _, board_name in normalized})
@@ -477,7 +552,7 @@ class Storage:
         chain_names = sorted({chain_name for _, chain_name in chain_members})
         with self.connect() as db:
             db.executemany(
-                self._upsert_modules_sql("values(?, ?, 'concept', '同花顺概念板块。', ?)"),
+                self._upsert_modules_sql("values(?, ?, 'concept', 'AkShare 东方财富概念板块。', ?)"),
                 [(_module_key("concept", name), name, source) for name in concept_names],
             )
             if chain_names:
@@ -493,7 +568,7 @@ class Storage:
             db.executemany(
                 self._upsert_members_sql(),
                 [
-                    (symbol, module_by_name[board_name], f"同花顺概念板块：{board_name}", timestamp)
+                    (symbol, module_by_name[board_name], f"东方财富概念板块：{board_name}", timestamp)
                     for symbol, board_name in normalized
                     if board_name in module_by_name
                 ],
@@ -507,7 +582,7 @@ class Storage:
                 db.executemany(
                     self._upsert_members_sql(),
                     [
-                        (symbol, chain_by_name[chain_name], f"由同花顺概念自动归入：{chain_name}", timestamp)
+                        (symbol, chain_by_name[chain_name], f"由东方财富概念自动归入：{chain_name}", timestamp)
                         for symbol, chain_name in chain_members
                         if chain_name in chain_by_name
                     ],
@@ -522,6 +597,7 @@ class Storage:
                 from stock_module_members member
                 join modules module on module.id = member.module_id
                 where module.type = 'concept'
+                  and (member.symbol like '0%%' or member.symbol like '3%%' or member.symbol like '6%%')
                 """
             ).fetchall()
             chain_members = sorted(
@@ -554,7 +630,7 @@ class Storage:
             return len(chain_members)
 
     def upsert_klines(self, rows: list[KLine]) -> None:
-        normalized_rows = [item for row in rows if (item := _normalized_kline(row)) is not None]
+        normalized_rows = [item for row in rows if (symbol := normalize_mainland_hs_symbol(row.symbol)) and (item := _normalized_kline(KLine(symbol, row.date, row.open, row.high, row.low, row.close, row.volume))) is not None]
         with self.connect() as db:
             db.executemany(
                 self._upsert_klines_sql(),
@@ -565,11 +641,10 @@ class Storage:
         inserted = 0
         with self.connect() as db:
             for signal in signals:
+                if not is_mainland_hs_symbol(signal.symbol):
+                    continue
                 cursor = db.execute(
-                    f"""
-                    {self._insert_ignore} into signals(symbol, trade_date, signal_type, severity, title, description, close, ma5, ma10, ma20)
-                    values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    self._upsert_signals_sql(),
                     (
                         signal.symbol,
                         signal.trade_date,
@@ -586,7 +661,26 @@ class Storage:
                 inserted += cursor.rowcount
         return inserted
 
+    def reclassify_obsolete_entry_signals(self, valid_entry_types: set[str]) -> int:
+        if not valid_entry_types:
+            return 0
+        placeholders = ",".join("?" for _ in valid_entry_types)
+        with self.connect() as db:
+            cursor = db.execute(
+                f"""
+                update signals
+                set severity = 'watch'
+                where severity = 'entry'
+                  and signal_type not in ({placeholders})
+                  and {self._hs_symbol_clause}
+                """,
+                sorted(valid_entry_types),
+            )
+            return cursor.rowcount
+
     def record_notification(self, signal: Signal) -> None:
+        if not is_mainland_hs_symbol(signal.symbol):
+            return
         key = f"{signal.symbol}:{signal.trade_date}:{signal.signal_type.value}"
         with self.connect() as db:
             db.execute(
@@ -596,7 +690,7 @@ class Storage:
 
     def latest_signals(self, limit: int = 200, signal_type: str | None = None, severity: str | None = None) -> list[dict[str, Any]]:
         query = "select * from signals"
-        clauses: list[str] = []
+        clauses: list[str] = [self._hs_symbol_clause]
         params: list[Any] = []
         if signal_type:
             clauses.append("signal_type = ?")
@@ -629,6 +723,7 @@ class Storage:
             else:
                 clauses.append("latest_signal.severity = ?")
                 params.append(severity)
+        clauses.append(self._stocks_hs_symbol_clause)
         if module_id:
             clauses.append(
                 """
@@ -710,6 +805,7 @@ class Storage:
                 from modules module
                 left join stock_module_members member on member.module_id = module.id
                 left join stocks on stocks.symbol = member.symbol
+                    and (stocks.symbol like '0%%' or stocks.symbol like '3%%' or stocks.symbol like '6%%')
                 group by module.id, module.module_key, module.name, module.type, module.description, module.source
                 order by
                     case module.type
@@ -736,6 +832,7 @@ class Storage:
                 from stock_module_members member
                 join modules module on module.id = member.module_id
                 where member.symbol in ({placeholders})
+                  and {self._member_hs_symbol_clause}
                 order by
                     case module.type
                         when 'market' then 1
@@ -765,7 +862,13 @@ class Storage:
     def stock_search(self, keyword: str = "", limit: int = 50) -> list[dict[str, Any]]:
         pattern = f"%{keyword}%"
         with self.connect() as db:
-            rows = [dict(row) for row in db.execute("select * from stocks where symbol like ? or name like ? order by symbol limit ?", (pattern, pattern, limit)).fetchall()]
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    f"select * from stocks where {self._hs_symbol_clause} and (symbol like ? or name like ?) order by symbol limit ?",
+                    (pattern, pattern, limit),
+                ).fetchall()
+            ]
         for row in rows:
             row["name"] = _clean_stock_name(row.get("name"), row["symbol"])
         return rows
@@ -776,6 +879,8 @@ class Storage:
         return _clean_stock_name(row["name"] if row else None, symbol)
 
     def klines_for_symbol(self, symbol: str, limit: int = 160) -> list[KLine]:
+        if not is_mainland_hs_symbol(symbol):
+            return []
         with self.connect() as db:
             rows = db.execute(
                 "select * from klines where symbol = ? order by trade_date desc limit ?",

@@ -44,6 +44,8 @@ export type KLineBar = {
   }>;
 };
 
+export type HistoryRange = "daily" | "monthly" | "yearly";
+
 export type HistoryResponse = {
   symbol: string;
   name?: string;

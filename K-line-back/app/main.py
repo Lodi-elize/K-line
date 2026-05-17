@@ -11,7 +11,10 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.history_range import HISTORY_RANGE_LIMITS, normalize_history_range, source_limit_for_range
+from app.core.models import AnnotatedBar, SignalType
 from app.core.signal_engine import SignalEngine
+from app.core.stock_scope import is_mainland_hs_symbol
 from app.providers.akshare_board_provider import AkshareBoardProvider
 from app.providers.fake import FakeMarketDataProvider
 from app.providers.mootdx_provider import MootdxProvider
@@ -22,6 +25,9 @@ from app.services.storage import Storage
 
 storage = Storage(settings.database_path, settings.database_url)
 storage.mark_interrupted_scans()
+storage.prune_non_hs_stocks()
+storage.reclassify_obsolete_entry_signals({SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK.value})
+storage.sync_market_modules_for_all_stocks()
 storage.backfill_chain_modules_from_concepts()
 engine = SignalEngine(settings.thresholds)
 
@@ -114,7 +120,7 @@ def sync_concept_modules() -> None:
             update_module_sync_state(
                 {
                     "updated_count": count,
-                    "message": f"正在同步同花顺概念模块：{current}/{total}，当前：{board_name}，已写入数据库。",
+                    "message": f"正在同步东财概念模块：{current}/{total}，当前：{board_name}，已写入数据库。",
                 }
             )
 
@@ -263,9 +269,21 @@ def stocks(q: str = "", limit: int = Query(50, ge=1, le=200)) -> list[dict[str, 
 
 
 @app.get("/api/stocks/{symbol}/history")
-def stock_history(symbol: str, limit: int = Query(160, ge=30, le=300)) -> dict[str, object]:
-    rows = storage.klines_for_symbol(symbol, limit=limit)
+def stock_history(symbol: str, range: str = Query("daily")) -> dict[str, object]:
+    if not is_mainland_hs_symbol(symbol):
+        return storage.annotated_history(symbol, [])
+    normalized_range = normalize_history_range(range)
+    source_limit = source_limit_for_range(normalized_range)
+    rows = storage.klines_for_symbol(symbol, limit=source_limit)
+    if normalized_range == "daily":
+        latest_trade_date = rows[-1].date if rows else None
+        intraday_rows = provider.intraday_bars(symbol, limit=240, trade_date=latest_trade_date)
+        if intraday_rows:
+            annotated = [AnnotatedBar(item.kline, item.ma5, item.ma10, item.ma20, []) for item in engine.annotate(intraday_rows)]
+            return storage.annotated_history(symbol, annotated)
+
     if not rows:
-        rows = provider.daily_bars(symbol, limit=limit)
+        rows = provider.daily_bars(symbol, limit=source_limit)
         storage.upsert_klines(rows)
-    return storage.annotated_history(symbol, engine.annotate(rows))
+    annotated = engine.annotate(rows)
+    return storage.annotated_history(symbol, annotated[-HISTORY_RANGE_LIMITS[normalized_range]:])

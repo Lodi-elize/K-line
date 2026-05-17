@@ -27,11 +27,13 @@ def signal_types(rows: list[KLine]) -> set[SignalType]:
     return {signal.signal_type for bar in annotated for signal in bar.signals}
 
 
-def test_detects_golden_and_bullish_alignment() -> None:
+def test_detects_golden_as_watch_and_bullish_alignment() -> None:
     closes = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10.1, 10.2, 10.4, 10.7, 11.1, 11.6, 12.2, 12.8, 13.5, 14.3, 15.0]
-    found = signal_types(make_rows(closes))
-    assert SignalType.GOLDEN_CROSS in found
-    assert SignalType.BULLISH_ALIGNMENT in found
+    annotated = SignalEngine(SignalThresholds()).annotate(make_rows(closes))
+    signals = [signal for bar in annotated for signal in bar.signals]
+    assert SignalType.GOLDEN_CROSS in {signal.signal_type for signal in signals}
+    assert all(signal.severity.value != "entry" for signal in signals if signal.signal_type == SignalType.GOLDEN_CROSS)
+    assert SignalType.BULLISH_ALIGNMENT in {signal.signal_type for signal in signals}
 
 
 def test_detects_death_and_bearish_alignment() -> None:
@@ -41,11 +43,27 @@ def test_detects_death_and_bearish_alignment() -> None:
     assert SignalType.BEARISH_ALIGNMENT in found
 
 
-def test_detects_five_ma_pullback_hold() -> None:
+def test_detects_five_ma_pullback_hold_as_watch() -> None:
     rows = make_rows([10, 10.2, 10.4, 10.6, 10.8, 11.0, 11.2, 11.4, 11.6, 11.8, 12.0, 12.2, 12.1])
     rows[-1] = KLine("600001", rows[-1].date, 12.0, 12.28, 11.96, 12.24, 1000)
-    found = signal_types(rows)
-    assert SignalType.FIVE_MA_PULLBACK_HOLD in found
+    annotated = SignalEngine(SignalThresholds()).annotate(rows)
+    signals = [signal for bar in annotated for signal in bar.signals]
+    assert SignalType.FIVE_MA_PULLBACK_HOLD in {signal.signal_type for signal in signals}
+    assert all(signal.severity.value != "entry" for signal in signals if signal.signal_type == SignalType.FIVE_MA_PULLBACK_HOLD)
+
+
+def test_detects_double_limit_up_ten_ma_pullback_entry() -> None:
+    closes = [10.0] * 10 + [11.0, 12.1, 11.9]
+    rows = make_rows(closes)
+    rows[10] = KLine("600001", rows[10].date, 10.2, 11.0, 10.2, 11.0, 5000)
+    rows[11] = KLine("600001", rows[11].date, 11.2, 12.1, 11.2, 12.1, 5200)
+    rows[12] = KLine("600001", rows[12].date, 12.0, 12.2, 10.40, 10.55, 2500)
+
+    annotated = SignalEngine(SignalThresholds()).annotate(rows)
+    signals = [signal for bar in annotated for signal in bar.signals]
+    entries = [signal for signal in signals if signal.severity.value == "entry"]
+
+    assert [signal.signal_type for signal in entries] == [SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK]
 
 
 def test_detects_ten_and_twenty_ma_breaks() -> None:
@@ -57,5 +75,5 @@ def test_detects_ten_and_twenty_ma_breaks() -> None:
 
 def test_config_items_are_documented() -> None:
     items = SignalThresholds().as_documented_items()
-    assert {item["key"] for item in items} >= {"touch_tolerance_pct", "arrangement_spread_pct"}
+    assert {item["key"] for item in items} >= {"touch_tolerance_pct", "arrangement_spread_pct", "double_limit_lookback_days", "limit_up_pct", "pullback_volume_shrink_ratio"}
     assert all(item["description"] and item["unit"] for item in items)

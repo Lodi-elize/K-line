@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from app.core.models import KLine
 from app.providers.base import MarketDataProvider
 
@@ -29,6 +31,27 @@ class FakeMarketDataProvider(MarketDataProvider):
                     low=round(close - 0.2, 2),
                     close=close,
                     volume=100000 + index,
+                )
+            )
+        return rows
+
+    def intraday_bars(self, symbol: str, limit: int = 240, trade_date: str | None = None) -> list[KLine]:
+        base = 10.0 if symbol.startswith("6") else 25.0
+        day = trade_date or "2026-02-28"
+        start = datetime.fromisoformat(f"{day[:10]} 09:30")
+        rows: list[KLine] = []
+        for index in range(min(limit, 240)):
+            timestamp = start + timedelta(minutes=index)
+            close = round(base + 0.01 * index + (0.03 if index % 17 == 0 else 0), 2)
+            rows.append(
+                KLine(
+                    symbol=symbol,
+                    date=timestamp.strftime("%Y-%m-%d %H:%M"),
+                    open=round(close - 0.02, 2),
+                    high=round(close + 0.05, 2),
+                    low=round(close - 0.05, 2),
+                    close=close,
+                    volume=1000 + index,
                 )
             )
         return rows

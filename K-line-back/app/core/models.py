@@ -12,6 +12,7 @@ class SignalSeverity(str, Enum):
 
 
 class SignalType(str, Enum):
+    DOUBLE_LIMIT_UP_TEN_MA_PULLBACK = "double_limit_up_ten_ma_pullback"
     GOLDEN_CROSS = "golden_cross"
     DEATH_CROSS = "death_cross"
     FIVE_MA_PULLBACK_HOLD = "five_ma_pullback_hold"

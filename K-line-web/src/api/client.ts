@@ -1,4 +1,4 @@
-import type { ConfigItem, HistoryResponse, ModuleSyncStatus, ScanStatus, Signal, Stock, StockModule } from "../types/api";
+import type { ConfigItem, HistoryRange, HistoryResponse, ModuleSyncStatus, ScanStatus, Signal, Stock, StockModule } from "../types/api";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
@@ -19,5 +19,5 @@ export const api = {
   moduleSyncStatus: () => request<ModuleSyncStatus>("/api/modules/sync/status"),
   runModuleSync: () => request<ModuleSyncStatus>("/api/modules/sync", { method: "POST" }),
   stocks: (q: string) => request<Stock[]>(`/api/stocks?q=${encodeURIComponent(q)}`),
-  history: (symbol: string) => request<HistoryResponse>(`/api/stocks/${symbol}/history`)
+  history: (symbol: string, range: HistoryRange) => request<HistoryResponse>(`/api/stocks/${symbol}/history?range=${range}`)
 };

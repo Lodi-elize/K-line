@@ -73,36 +73,56 @@ class SignalEngine:
         previous_ma20 = ma20[index - 1]
         signals: list[Signal] = []
 
+        if self._double_limit_up_ten_ma_pullback(rows, ma10, index):
+            signals.append(
+                self._signal(
+                    row,
+                    SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK,
+                    SignalSeverity.ENTRY,
+                    "连板缩量回踩10日线",
+                    "十个交易日内出现连续两天涨停，随后缩量回调并触及10日均线附近。",
+                    current_ma5,
+                    current_ma10,
+                    current_ma20,
+                )
+            )
+
         if _crossed_above(previous_ma5, previous_ma10, current_ma5, current_ma10):
-            signals.append(self._signal(row, SignalType.GOLDEN_CROSS, SignalSeverity.ENTRY, "5日线金叉", "5日均线上穿10日均线，属于严格短线进场信号。", current_ma5, current_ma10, current_ma20))
+            signals.append(
+                self._signal(
+                    row,
+                    SignalType.GOLDEN_CROSS,
+                    SignalSeverity.WATCH,
+                    "5日线金叉",
+                    "5日均线上穿10日均线，作为观察信号，不再直接作为进场条件。",
+                    current_ma5,
+                    current_ma10,
+                    current_ma20,
+                )
+            )
 
         if _crossed_below(previous_ma5, previous_ma10, current_ma5, current_ma10):
             signals.append(self._signal(row, SignalType.DEATH_CROSS, SignalSeverity.EXIT, "5日线死叉", "5日均线下穿10日均线，属于离场/风险信号。", current_ma5, current_ma10, current_ma20))
 
-        # "5日线回踩不破" is treated strictly: price must approach the 5MA, avoid a meaningful break, and close back above it.
         if self._is_five_ma_pullback_hold(row, previous, current_ma5, current_ma10, previous_ma5):
-            signals.append(self._signal(row, SignalType.FIVE_MA_PULLBACK_HOLD, SignalSeverity.ENTRY, "回踩5日线不破", "股价回踩接近5日均线但未有效跌破，同时5日线仍在10日线上方。", current_ma5, current_ma10, current_ma20))
+            signals.append(self._signal(row, SignalType.FIVE_MA_PULLBACK_HOLD, SignalSeverity.WATCH, "回踩5日线不破", "股价回踩接近5日均线但未有效跌破，作为观察信号，不再直接作为进场条件。", current_ma5, current_ma10, current_ma20))
 
-        # "拐头向上/向下" uses slope over the configured lookback so a one-day wiggle is not enough.
         if self._ma_turns_up(ma5, index):
             signals.append(self._signal(row, SignalType.FIVE_MA_TURN_UP, SignalSeverity.WATCH, "5日线拐头向上", "5日均线斜率超过严格上拐阈值，可作为观察信号。", current_ma5, current_ma10, current_ma20))
 
         if self._ma_turns_down(ma5, index):
             signals.append(self._signal(row, SignalType.FIVE_MA_TURN_DOWN, SignalSeverity.RISK, "5日线拐头向下", "5日均线斜率超过严格下拐阈值，提示短线走弱。", current_ma5, current_ma10, current_ma20))
 
-        # The 10MA is the stop/control line: a break with no rebound is a risk signal.
         if self._breaks_without_rebound(row.close, previous.close, current_ma10, previous_ma10):
             signals.append(self._signal(row, SignalType.TEN_MA_BREAK_NO_REBOUND, SignalSeverity.RISK, "跌破10日线且无反抽", "收盘跌破10日均线，且没有恢复到足以确认反抽的幅度。", current_ma5, current_ma10, current_ma20))
 
         if self._crossed_line_down(previous.close, previous_ma20, row.close, current_ma20):
             signals.append(self._signal(row, SignalType.TWENTY_MA_BREAK, SignalSeverity.EXIT, "跌破20日生命线", "收盘下穿20日均线，属于严格生命线离场信号。", current_ma5, current_ma10, current_ma20))
 
-        # 20MA support/resistance annotations require a close on the expected side plus an intraday touch near the line.
         support_resistance = self._twenty_ma_touch(row, current_ma20)
         if support_resistance is not None:
             signals.append(self._signal(row, support_resistance[0], support_resistance[1], support_resistance[2], support_resistance[3], current_ma5, current_ma10, current_ma20))
 
-        # Alignment signals require both ordering and minimum spread so flat, tangled averages do not trigger.
         if self._bullish_alignment(ma5, ma10, ma20, index):
             signals.append(self._signal(row, SignalType.BULLISH_ALIGNMENT, SignalSeverity.WATCH, "均线多头排列", "5日线 > 10日线 > 20日线，且发散和上行确认通过。", current_ma5, current_ma10, current_ma20))
 
@@ -123,6 +143,42 @@ class SignalEngine:
         ma20: float | None,
     ) -> Signal:
         return Signal(row.symbol, row.date, signal_type, severity, title, description, row.close, ma5, ma10, ma20)
+
+    def _double_limit_up_ten_ma_pullback(self, rows: list[KLine], ma10: list[float | None], index: int) -> bool:
+        current_ma10 = ma10[index]
+        if current_ma10 is None:
+            return False
+        row = rows[index]
+        touched_ten_ma = row.low <= current_ma10 * (1 + self.thresholds.touch_tolerance_pct)
+        held_ten_ma = row.close >= current_ma10 * (1 - self.thresholds.break_tolerance_pct)
+        if not touched_ten_ma or not held_ten_ma:
+            return False
+
+        pair = self._recent_consecutive_limit_up_pair(rows, index)
+        if pair is None:
+            return False
+        first, second = pair
+        limit_avg_volume = (rows[first].volume + rows[second].volume) / 2
+        if limit_avg_volume <= 0:
+            return False
+        volume_shrunk = row.volume <= limit_avg_volume * self.thresholds.pullback_volume_shrink_ratio
+        return volume_shrunk and index > second and not self._is_limit_up(rows, index)
+
+    def _recent_consecutive_limit_up_pair(self, rows: list[KLine], index: int) -> tuple[int, int] | None:
+        window_start = max(1, index - self.thresholds.double_limit_lookback_days + 1)
+        for current in range(index - 1, window_start, -1):
+            previous = current - 1
+            if self._is_limit_up(rows, previous) and self._is_limit_up(rows, current):
+                return previous, current
+        return None
+
+    def _is_limit_up(self, rows: list[KLine], index: int) -> bool:
+        if index <= 0:
+            return False
+        previous_close = rows[index - 1].close
+        if previous_close <= 0:
+            return False
+        return (rows[index].close - previous_close) / previous_close >= self.thresholds.limit_up_pct
 
     def _is_five_ma_pullback_hold(self, row: KLine, previous: KLine, ma5: float | None, ma10: float | None, previous_ma5: float | None) -> bool:
         if ma5 is None or ma10 is None or previous_ma5 is None or ma5 <= ma10:

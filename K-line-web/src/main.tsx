@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { api } from "./api/client";
 import { KLineChart } from "./components/KLineChart";
 import { SignalTable } from "./components/SignalTable";
-import type { ConfigItem, HistoryResponse, ModuleSyncStatus, ScanStatus, Signal, StockModule } from "./types/api";
+import type { ConfigItem, HistoryRange, HistoryResponse, ModuleSyncStatus, ScanStatus, Signal, StockModule } from "./types/api";
 import { statusLabel } from "./types/labels";
 import "./styles.css";
 
@@ -114,6 +114,7 @@ function App() {
   const [config, setConfig] = useState<ConfigItem[]>([]);
   const [modules, setModules] = useState<StockModule[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState("");
+  const [historyRange, setHistoryRange] = useState<HistoryRange>("daily");
   const [severity, setSeverity] = useState("");
   const [moduleId, setModuleId] = useState("");
   const [loading, setLoading] = useState(false);
@@ -178,9 +179,16 @@ function App() {
     setModules(await api.modules());
   }
 
-  async function loadHistory(symbol: string) {
+  async function loadHistory(symbol: string, range: HistoryRange = historyRange) {
     setSelectedSymbol(symbol);
-    setHistory(await api.history(symbol));
+    setHistory(await api.history(symbol, range));
+  }
+
+  function changeHistoryRange(range: HistoryRange) {
+    setHistoryRange(range);
+    if (selectedSymbol) {
+      loadHistory(selectedSymbol, range);
+    }
   }
 
   function showToast(message: string, tone: ToastState["tone"] = "info") {
@@ -380,7 +388,7 @@ function App() {
 
       <section className="workspace">
         <SignalTable signals={signals} selectedSymbol={selectedSymbol} updatedAt={status?.finished_at || status?.started_at} onSelectSymbol={loadHistory} />
-        <KLineChart history={history} />
+        <KLineChart history={history} range={historyRange} onRangeChange={changeHistoryRange} />
       </section>
 
       <section className="panel config-panel">

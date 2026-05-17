@@ -6,12 +6,12 @@
 
 ## 功能
 
-- 全市场 A 股日线扫描。
+- 沪深 A 股日线扫描，仅保留 `0`、`3`、`6` 开头股票代码。
 - 5 日线、10 日线、20 日线均线信号计算。
 - 最新股票状态列表，支持按信号级别和模块筛选。
 - 单只股票历史 K 线、MA5、MA10、MA20 和信号标注。
 - 概念模块、产业链模块、市场模块展示和筛选。
-- 支持同花顺概念模块同步，模块更新状态通过 WebSocket 推送。
+- 支持东方财富概念模块同步，模块更新状态通过 WebSocket 推送。
 - 定时扫描任务和手动扫描接口。
 - SQLite 本地缓存或 MySQL 远端存储 K 线、扫描任务、信号、模块和通知记录。
 - 预留通知接口，当前版本只写入本地通知记录。
@@ -98,6 +98,16 @@ http://127.0.0.1:5173
 - `80`：前端页面入口，必须开放。
 - `8001`：后端 API 可选直连端口。页面访问不依赖公网开放 `8001`，因为前端 Nginx 会把 `/api` 和 `/ws` 反代到后端容器。
 - `8000`：后端容器内部端口，不需要对公网开放。
+
+### 股票池范围
+
+当前股票池只保留沪深 A 股：
+
+- `6` 开头：沪市主板，`688` 开头归入科创板。
+- `0` 开头：深市主板。
+- `3` 开头：创业板。
+
+北交所等其他市场代码不会进入扫描、列表、搜索、模块归属和模块计数。
 
 ### 环境变量
 
@@ -285,6 +295,18 @@ $env:PYTHONPATH=(Get-Location).Path
 $env:KLINE_PROVIDER="fake"
 .\.venv\Scripts\pytest -q
 ```
+
+远端 MySQL 连接验收测试：
+
+```powershell
+cd K-line-back
+$env:PYTHONPATH=(Get-Location).Path
+$env:KLINE_PROVIDER="fake"
+$env:KLINE_DATABASE_URL="mysql+pymysql://用户名:密码@数据库主机:端口/kLineDB?charset=utf8mb4"
+.\.venv\Scripts\pytest -q tests\test_api.py::test_remote_database_connection_when_configured
+```
+
+远端数据库验收测试只读连接、模块和股票状态；不要直接对生产库运行完整测试集，完整测试会触发 fake 扫描并写入测试数据。
 
 前端构建：
 

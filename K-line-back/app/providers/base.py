@@ -11,3 +11,6 @@ class MarketDataProvider(Protocol):
 
     def daily_bars(self, symbol: str, limit: int = 120) -> list[KLine]:
         ...
+
+    def intraday_bars(self, symbol: str, limit: int = 240, trade_date: str | None = None) -> list[KLine]:
+        ...

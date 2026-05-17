@@ -11,6 +11,18 @@ class SignalThresholds:
     # Unit: decimal ratio of MA value. Lower values are stricter and produce fewer support/resistance signals.
     touch_tolerance_pct: float = 0.006
 
+    # Lookback window used by the entry setup to find two consecutive limit-up days.
+    # Unit: trading days. Larger values keep the setup alive longer after the limit-up pair.
+    double_limit_lookback_days: int = 10
+
+    # Daily close gain that is treated as a limit-up day.
+    # Unit: decimal ratio. 0.095 allows for actual exchange rounding around the 10% limit.
+    limit_up_pct: float = 0.095
+
+    # Current volume must be below this ratio of the average volume of the consecutive limit-up days.
+    # Unit: decimal ratio. Lower values require a stronger volume contraction on pullback.
+    pullback_volume_shrink_ratio: float = 0.8
+
     # Allowed intraday pierce below an MA during a "pullback hold" check.
     # Unit: decimal ratio of MA value. Lower values reject more noisy pullbacks.
     break_tolerance_pct: float = 0.001
@@ -37,6 +49,27 @@ class SignalThresholds:
 
     def as_documented_items(self) -> list[dict[str, str | float | int]]:
         return [
+            {
+                "key": "double_limit_lookback_days",
+                "label": "连板回看天数",
+                "value": self.double_limit_lookback_days,
+                "description": "进场条件中查找连续两天涨停的时间窗口；当前规则固定要求十天内出现连板。",
+                "unit": "交易日",
+            },
+            {
+                "key": "limit_up_pct",
+                "label": "涨停涨幅阈值",
+                "value": self.limit_up_pct,
+                "description": "单日收盘涨幅达到该比例时视为涨停，用 9.5% 兼容涨停价四舍五入。",
+                "unit": "比例",
+            },
+            {
+                "key": "pullback_volume_shrink_ratio",
+                "label": "缩量回调比例",
+                "value": self.pullback_volume_shrink_ratio,
+                "description": "回调日成交量需要低于连续涨停两天平均成交量的该比例，数值越低越严格。",
+                "unit": "比例",
+            },
             {
                 "key": "touch_tolerance_pct",
                 "label": "均线触碰容忍度",

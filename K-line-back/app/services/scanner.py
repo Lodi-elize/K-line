@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.core.stock_scope import is_mainland_hs_symbol
 from app.core.signal_engine import SignalEngine
 from app.providers.akshare_board_provider import AkshareBoardProvider
 from app.providers.base import MarketDataProvider
@@ -41,6 +42,7 @@ class ScannerService:
         warnings: list[str] = []
         try:
             stocks = self.provider.list_symbols()
+            stocks = [stock for stock in stocks if is_mainland_hs_symbol(stock.get("symbol"))]
             if self.max_symbols:
                 stocks = stocks[: self.max_symbols]
             self.storage.upsert_stocks(stocks)

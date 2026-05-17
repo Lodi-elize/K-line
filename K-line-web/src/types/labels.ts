@@ -9,6 +9,7 @@ export const severityLabel: Record<Signal["severity"], string> = {
 };
 
 export const signalTypeLabel: Record<string, string> = {
+  double_limit_up_ten_ma_pullback: "连板缩量回踩10日线",
   golden_cross: "5日线金叉",
   death_cross: "5日线死叉",
   five_ma_pullback_hold: "回踩5日线不破",

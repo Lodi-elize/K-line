@@ -1,11 +1,13 @@
 import { CartesianGrid, ComposedChart, Line, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis } from "recharts";
-import type { HistoryResponse, KLineBar, Signal } from "../types/api";
+import type { HistoryRange, HistoryResponse, KLineBar, Signal } from "../types/api";
 import { severityLabel, signalTypeLabel } from "../types/labels";
 
 type ChartSeverity = Exclude<Signal["severity"], "normal">;
 
 type Props = {
   history: HistoryResponse | null;
+  range: HistoryRange;
+  onRangeChange: (range: HistoryRange) => void;
 };
 
 type Marker = {
@@ -29,6 +31,11 @@ const markerColor: Record<ChartSeverity, string> = {
 };
 
 const visibleSeverities: ChartSeverity[] = ["entry", "exit"];
+const rangeOptions: Array<{ value: HistoryRange; label: string; subtitle: string }> = [
+  { value: "daily", label: "日", subtitle: "当天分钟数据" },
+  { value: "monthly", label: "月", subtitle: "最近一月" },
+  { value: "yearly", label: "年", subtitle: "最近一年" }
+];
 
 function markerData(bars: KLineBar[]): Marker[] {
   return bars.flatMap((bar) =>
@@ -66,8 +73,14 @@ function formatValue(value: unknown) {
   return typeof value === "number" ? value.toFixed(2) : "--";
 }
 
+function formatXAxisLabel(value: string) {
+  return value.includes(" ") ? value.slice(11, 16) : value;
+}
+
 function priceDomain(bars: ChartBar[]): [number, number] | ["auto", "auto"] {
-  const values = bars.flatMap((bar) => [bar.open, bar.high, bar.low, bar.close, bar.ma5, bar.ma10, bar.ma20]).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const values = bars
+    .flatMap((bar) => [bar.open, bar.high, bar.low, bar.close, bar.ma5, bar.ma10, bar.ma20])
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   if (!values.length) return ["auto", "auto"];
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -131,7 +144,7 @@ function CandleShape(props: { cx?: number; yAxis?: { scale: (value: number) => n
 function MarkerShape(props: { cx?: number; cy?: number; payload?: ChartBar }) {
   const { cx = 0, cy = 0, payload } = props;
   if (!payload?.marker) return null;
-  const severity = payload?.marker?.severity ?? "watch";
+  const severity = payload.marker.severity;
   const color = markerColor[severity];
   if (severity === "exit" || severity === "risk") {
     return <path d={`M ${cx} ${cy - 7} L ${cx + 7} ${cy + 6} L ${cx - 7} ${cy + 6} Z`} fill={color} stroke="#ffffff" strokeWidth={2} />;
@@ -139,7 +152,7 @@ function MarkerShape(props: { cx?: number; cy?: number; payload?: ChartBar }) {
   return <circle cx={cx} cy={cy} r={6} fill={color} stroke="#ffffff" strokeWidth={2} />;
 }
 
-export function KLineChart({ history }: Props) {
+export function KLineChart({ history, range, onRangeChange }: Props) {
   if (!history || !history.bars.length) {
     return (
       <div className="panel chart-panel empty-chart">
@@ -148,7 +161,7 @@ export function KLineChart({ history }: Props) {
     );
   }
 
-  const bars = history.bars.slice(-90);
+  const bars = history.bars;
   const markers = markerData(bars);
   const chartBars = chartData(bars);
   const yDomain = priceDomain(chartBars);
@@ -156,6 +169,8 @@ export function KLineChart({ history }: Props) {
   const recentMarkers = markers.slice(-6).reverse();
   const titleName = history.name && history.name !== history.symbol ? history.name : history.symbol;
   const showSymbol = history.name && history.name !== history.symbol;
+  const selectedRange = rangeOptions.find((option) => option.value === range) || rangeOptions[0];
+  const showCandles = range !== "daily";
 
   return (
     <div className="panel chart-panel">
@@ -165,18 +180,27 @@ export function KLineChart({ history }: Props) {
             {titleName}
             {showSymbol ? <span>{history.symbol}</span> : null}
           </div>
-          <div className="chart-subtitle">最近90个交易日 · 严格均线信号</div>
+          <div className="chart-subtitle">{selectedRange.subtitle} · {range === "daily" ? "分时价格" : "日K线数据"}</div>
         </div>
-        <div className="chart-metrics">
-          <span>收盘 <b>{formatValue(latest?.close)}</b></span>
-          <span>MA5 <b>{formatValue(latest?.ma5)}</b></span>
-          <span>MA10 <b>{formatValue(latest?.ma10)}</b></span>
-          <span>MA20 <b>{formatValue(latest?.ma20)}</b></span>
+        <div className="chart-side">
+          <div className="period-switch" aria-label="切换数据范围">
+            {rangeOptions.map((option) => (
+              <button type="button" className={option.value === range ? "active" : ""} key={option.value} onClick={() => onRangeChange(option.value)}>
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="chart-metrics">
+            <span>收盘 <b>{formatValue(latest?.close)}</b></span>
+            <span>MA5 <b>{formatValue(latest?.ma5)}</b></span>
+            <span>MA10 <b>{formatValue(latest?.ma10)}</b></span>
+            <span>MA20 <b>{formatValue(latest?.ma20)}</b></span>
+          </div>
         </div>
       </div>
       <div className="chart-legend">
         <span><i className="line close" />收盘</span>
-        <span><i className="candle up" />K线箱体</span>
+        {showCandles ? <span><i className="candle up" />K线箱体</span> : null}
         <span><i className="line ma5" />MA5</span>
         <span><i className="line ma10" />MA10</span>
         <span><i className="line ma20" />MA20</span>
@@ -193,10 +217,10 @@ export function KLineChart({ history }: Props) {
               </linearGradient>
             </defs>
             <CartesianGrid stroke="#e7ebf0" vertical={false} strokeDasharray="4 4" />
-            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} minTickGap={30} />
+            <XAxis dataKey="date" tickFormatter={formatXAxisLabel} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} minTickGap={30} />
             <YAxis domain={yDomain} tickFormatter={(value) => Number(value).toFixed(2)} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} width={48} />
             <Tooltip content={<ChartTooltip />} cursor={{ stroke: "#94a3b8", strokeDasharray: "4 4" }} />
-            <Scatter dataKey="candleValue" name="K线" shape={<CandleShape />} isAnimationActive={false} />
+            {showCandles ? <Scatter dataKey="candleValue" name="K线" shape={<CandleShape />} isAnimationActive={false} /> : null}
             <Line type="monotone" dataKey="close" name="收盘" stroke="url(#closeStroke)" dot={<MarkerShape />} strokeWidth={2.1} activeDot={{ r: 4 }} />
             <Line type="monotone" dataKey="ma5" name="MA5" stroke="#2563eb" dot={false} strokeWidth={1.8} />
             <Line type="monotone" dataKey="ma10" name="MA10" stroke="#f59e0b" dot={false} strokeWidth={1.8} />

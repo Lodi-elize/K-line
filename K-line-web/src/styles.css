@@ -792,6 +792,39 @@ button.signal-row:hover,
   min-width: 230px;
 }
 
+.chart-side {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  min-width: 230px;
+}
+
+.period-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 34px);
+  height: 30px;
+  padding: 2px;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.period-switch button {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.period-switch button.active {
+  background: #0f766e;
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(15, 118, 110, 0.24);
+}
+
 .chart-metrics span {
   display: flex;
   justify-content: space-between;
@@ -1066,6 +1099,12 @@ button.signal-row:hover,
   }
 
   .chart-metrics {
+    margin-top: 12px;
+    min-width: 0;
+  }
+
+  .chart-side {
+    justify-items: start;
     margin-top: 12px;
     min-width: 0;
   }
