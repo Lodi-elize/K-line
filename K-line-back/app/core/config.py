@@ -5,6 +5,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env_file(Path(__file__).resolve().parents[2] / ".env")
+
+
 @dataclass(frozen=True)
 class SignalThresholds:
     # Price distance from an MA that still counts as a touch.
@@ -16,8 +33,8 @@ class SignalThresholds:
     double_limit_lookback_days: int = 10
 
     # Daily close gain that is treated as a limit-up day.
-    # Unit: decimal ratio. 0.095 allows for actual exchange rounding around the 10% limit.
-    limit_up_pct: float = 0.095
+    # Unit: decimal ratio.
+    limit_up_pct: float = 0.07
 
     # Current volume must be below this ratio of the average volume of the consecutive limit-up days.
     # Unit: decimal ratio. Lower values require a stronger volume contraction on pullback.
@@ -60,7 +77,7 @@ class SignalThresholds:
                 "key": "limit_up_pct",
                 "label": "涨停涨幅阈值",
                 "value": self.limit_up_pct,
-                "description": "单日收盘涨幅达到该比例时视为涨停，用 9.5% 兼容涨停价四舍五入。",
+                "description": "单日收盘涨幅达到该比例时视为涨停。",
                 "unit": "比例",
             },
             {

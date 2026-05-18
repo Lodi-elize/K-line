@@ -66,6 +66,19 @@ def test_detects_double_limit_up_ten_ma_pullback_entry() -> None:
     assert [signal.signal_type for signal in entries] == [SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK]
 
 
+def test_treats_seven_percent_gain_as_limit_up_for_entry() -> None:
+    closes = [10.0] * 10 + [10.8, 11.6, 10.9]
+    rows = make_rows(closes)
+    rows[10] = KLine("600001", rows[10].date, 10.1, 10.8, 10.1, 10.8, 5000)
+    rows[11] = KLine("600001", rows[11].date, 10.9, 11.6, 10.9, 11.6, 5200)
+    rows[12] = KLine("600001", rows[12].date, 11.2, 11.3, 10.30, 10.47, 2500)
+
+    annotated = SignalEngine(SignalThresholds()).annotate(rows)
+    entries = [signal for bar in annotated for signal in bar.signals if signal.severity.value == "entry"]
+
+    assert [signal.signal_type for signal in entries] == [SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK]
+
+
 def test_detects_ten_and_twenty_ma_breaks() -> None:
     closes = [20.0] * 20 + [19.0]
     found = signal_types(make_rows(closes))

@@ -236,12 +236,17 @@ function App() {
   async function runScan() {
     if (isScanning) return;
     setLoading(true);
+    setStatus((current) => ({
+      id: current?.id ?? 0,
+      started_at: current?.started_at ?? new Date().toISOString(),
+      status: "running",
+      scanned_count: current?.status === "running" ? current.scanned_count : 0,
+      signal_count: current?.status === "running" ? current.signal_count : 0,
+      message: current?.message,
+    }));
     showToast("正在扫描全市场...", "info");
     try {
       const result = await api.runScan();
-      const tasks: Array<Promise<unknown>> = [loadSignals(), loadStatus(), loadConfig(), loadModules()];
-      if (selectedSymbol) tasks.push(loadHistory(selectedSymbol));
-      await Promise.all(tasks);
       if (result.status === "running") {
         showToast(result.message || "扫描已在后台启动，请稍后刷新", "info");
       } else if (result.status === "success") {
@@ -294,6 +299,40 @@ function App() {
     };
     return () => socket.close();
   }, []);
+
+  useEffect(() => {
+    if (status?.status !== "running") return;
+
+    let cancelled = false;
+    const pollScanStatus = async () => {
+      try {
+        const nextStatus = await api.scanStatus();
+        if (cancelled || !nextStatus) return;
+        setStatus(nextStatus);
+        if (nextStatus.status !== "running") {
+          const tasks: Array<Promise<unknown>> = [loadSignals(), loadModules()];
+          if (selectedSymbol) tasks.push(loadHistory(selectedSymbol, historyRange));
+          await Promise.all(tasks);
+          if (nextStatus.status === "success") {
+            showToast(`扫描完成：${nextStatus.scanned_count} 只，新增 ${nextStatus.signal_count} 条`, "success");
+          } else if (nextStatus.status === "failed") {
+            showToast(nextStatus.message || "扫描失败", "error");
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          showToast(error instanceof Error ? `扫描进度刷新失败：${error.message}` : "扫描进度刷新失败", "error");
+        }
+      }
+    };
+
+    pollScanStatus();
+    const intervalId = window.setInterval(pollScanStatus, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [status?.status, selectedSymbol, historyRange]);
 
   useEffect(() => {
     loadSignals();

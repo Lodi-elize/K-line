@@ -21,16 +21,24 @@ class FakeMarketDataProvider(MarketDataProvider):
         direction = 0.16 if symbol.startswith("6") else -0.12
         rows: list[KLine] = []
         for index in range(limit):
-            close = round(base + direction * index + (0.15 if index % 7 == 0 else 0), 2)
+            if symbol.startswith("6") and index >= limit - 3:
+                setup_closes = [11.0, 12.1, 10.55]
+                close = setup_closes[index - (limit - 3)]
+                volume = [5000, 5200, 2500][index - (limit - 3)]
+                low = 10.4 if index == limit - 1 else close - 0.2
+            else:
+                close = round(base + (0 if symbol.startswith("6") else direction * index) + (0.15 if index % 7 == 0 and not symbol.startswith("6") else 0), 2)
+                volume = 100000 + index
+                low = close - 0.2
             rows.append(
                 KLine(
                     symbol=symbol,
-                    date=f"2026-01-{(index % 28) + 1:02d}" if index < 28 else f"2026-02-{((index - 28) % 28) + 1:02d}",
+                    date=(datetime(2026, 1, 1) + timedelta(days=index)).strftime("%Y-%m-%d"),
                     open=round(close - 0.05, 2),
                     high=round(close + 0.2, 2),
-                    low=round(close - 0.2, 2),
+                    low=round(low, 2),
                     close=close,
-                    volume=100000 + index,
+                    volume=volume,
                 )
             )
         return rows

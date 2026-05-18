@@ -21,13 +21,8 @@ type Marker = {
 type ChartBar = KLineBar & {
   candleValue: number;
   marker?: Marker;
-};
-
-const markerColor: Record<ChartSeverity, string> = {
-  entry: "#dc2626",
-  watch: "#0284c7",
-  risk: "#d97706",
-  exit: "#16a34a"
+  entryMarker?: number;
+  exitMarker?: number;
 };
 
 const visibleSeverities: ChartSeverity[] = ["entry", "exit"];
@@ -64,16 +59,25 @@ function chartData(bars: KLineBar[]): ChartBar[] {
         title: primarySignal.title,
         severity: primarySignal.severity,
         signalType: primarySignal.signal_type
-      }
+      },
+      entryMarker: primarySignal.severity === "entry" ? bar.close : undefined,
+      exitMarker: primarySignal.severity === "exit" ? bar.close : undefined
     };
   });
+}
+
+function isPlottableCoordinate(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function formatValue(value: unknown) {
   return typeof value === "number" ? value.toFixed(2) : "--";
 }
 
-function formatXAxisLabel(value: string) {
+function formatXAxisLabel(value: string, range: HistoryRange) {
+  const datePart = value.split(" ")[0] || value;
+  if (range === "yearly") return datePart;
+  if (range === "monthly") return datePart.slice(5, 10);
   return value.includes(" ") ? value.slice(11, 16) : value;
 }
 
@@ -91,7 +95,7 @@ function priceDomain(bars: ChartBar[]): [number, number] | ["auto", "auto"] {
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name?: string; value?: unknown; payload?: ChartBar }>; label?: string }) {
   if (!active || !payload?.length) return null;
   const marker = payload.find((item) => item.payload?.marker)?.payload?.marker;
-  const bar = payload[0]?.payload;
+  const bar = payload.find((item) => item.payload?.date)?.payload;
   return (
     <div className="chart-tooltip">
       <strong>{label}</strong>
@@ -141,15 +145,21 @@ function CandleShape(props: { cx?: number; yAxis?: { scale: (value: number) => n
   );
 }
 
-function MarkerShape(props: { cx?: number; cy?: number; payload?: ChartBar }) {
-  const { cx = 0, cy = 0, payload } = props;
-  if (!payload?.marker) return null;
-  const severity = payload.marker.severity;
-  const color = markerColor[severity];
-  if (severity === "exit" || severity === "risk") {
-    return <path d={`M ${cx} ${cy - 7} L ${cx + 7} ${cy + 6} L ${cx - 7} ${cy + 6} Z`} fill={color} stroke="#ffffff" strokeWidth={2} />;
-  }
-  return <circle cx={cx} cy={cy} r={6} fill={color} stroke="#ffffff" strokeWidth={2} />;
+function EntryMarkerShape(props: { cx?: number; cy?: number; payload?: ChartBar }) {
+  const { cx, cy, payload } = props;
+  if (!isPlottableCoordinate(cx) || !isPlottableCoordinate(cy) || !isPlottableCoordinate(payload?.entryMarker)) return null;
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={7} fill="#dc2626" stroke="#ffffff" strokeWidth={2} />
+      <path d={`M ${cx - 4} ${cy + 1} L ${cx} ${cy - 4} L ${cx + 4} ${cy + 1}`} fill="none" stroke="#ffffff" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+    </g>
+  );
+}
+
+function ExitMarkerShape(props: { cx?: number; cy?: number; payload?: ChartBar }) {
+  const { cx, cy, payload } = props;
+  if (!isPlottableCoordinate(cx) || !isPlottableCoordinate(cy) || !isPlottableCoordinate(payload?.exitMarker)) return null;
+  return <path d={`M ${cx} ${cy + 7} L ${cx + 7} ${cy - 6} L ${cx - 7} ${cy - 6} Z`} fill="#16a34a" stroke="#ffffff" strokeWidth={2} />;
 }
 
 export function KLineChart({ history, range, onRangeChange }: Props) {
@@ -164,6 +174,8 @@ export function KLineChart({ history, range, onRangeChange }: Props) {
   const bars = history.bars;
   const markers = markerData(bars);
   const chartBars = chartData(bars);
+  const entryMarkerBars = chartBars.filter((bar) => isPlottableCoordinate(bar.entryMarker));
+  const exitMarkerBars = chartBars.filter((bar) => isPlottableCoordinate(bar.exitMarker));
   const yDomain = priceDomain(chartBars);
   const latest = bars[bars.length - 1];
   const recentMarkers = markers.slice(-6).reverse();
@@ -217,14 +229,16 @@ export function KLineChart({ history, range, onRangeChange }: Props) {
               </linearGradient>
             </defs>
             <CartesianGrid stroke="#e7ebf0" vertical={false} strokeDasharray="4 4" />
-            <XAxis dataKey="date" tickFormatter={formatXAxisLabel} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} minTickGap={30} />
+            <XAxis dataKey="date" tickFormatter={(value) => formatXAxisLabel(String(value), range)} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} minTickGap={30} />
             <YAxis domain={yDomain} tickFormatter={(value) => Number(value).toFixed(2)} tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} width={48} />
             <Tooltip content={<ChartTooltip />} cursor={{ stroke: "#94a3b8", strokeDasharray: "4 4" }} />
             {showCandles ? <Scatter dataKey="candleValue" name="K线" shape={<CandleShape />} isAnimationActive={false} /> : null}
-            <Line type="monotone" dataKey="close" name="收盘" stroke="url(#closeStroke)" dot={<MarkerShape />} strokeWidth={2.1} activeDot={{ r: 4 }} />
+            <Line type="monotone" dataKey="close" name="收盘" stroke="url(#closeStroke)" dot={false} strokeWidth={2.1} activeDot={{ r: 4 }} />
             <Line type="monotone" dataKey="ma5" name="MA5" stroke="#2563eb" dot={false} strokeWidth={1.8} />
             <Line type="monotone" dataKey="ma10" name="MA10" stroke="#f59e0b" dot={false} strokeWidth={1.8} />
             <Line type="monotone" dataKey="ma20" name="MA20" stroke="#16a34a" dot={false} strokeWidth={1.8} />
+            <Scatter dataKey="entryMarker" name="进场" shape={<EntryMarkerShape />} isAnimationActive={false} />
+            <Scatter dataKey="exitMarker" name="离场" shape={<ExitMarkerShape />} isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>

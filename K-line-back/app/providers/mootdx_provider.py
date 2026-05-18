@@ -8,9 +8,21 @@ from app.core.stock_scope import is_mainland_hs_symbol
 from app.providers.base import MarketDataProvider
 
 
+SZ_MARKET = 0
+SH_MARKET = 1
+
+
 def _clean_stock_name(value: object, fallback: str) -> str:
     cleaned = "".join(char for char in str(value or "").replace("\ufffd", "") if char.isprintable()).strip()
     return cleaned or fallback
+
+
+def _symbol_belongs_to_market(symbol: str, market: int) -> bool:
+    if market == SZ_MARKET:
+        return symbol.startswith(("00", "30"))
+    if market == SH_MARKET:
+        return symbol.startswith(("60", "68", "90"))
+    return False
 
 
 def _normalized_kline(symbol: str, date: str, open_price: float, high: float, low: float, close: float, volume: float) -> KLine | None:
@@ -31,16 +43,31 @@ class MootdxProvider(MarketDataProvider):
         self.client = Quotes.factory(market="std")
 
     def list_symbols(self) -> list[dict[str, str]]:
-        data = self._call_first_available(["stocks", "stock_all"])
-        if data is None:
-            return []
-        records = data.to_dict("records") if hasattr(data, "to_dict") else list(data)
-        symbols: list[dict[str, str]] = []
-        for row in records:
-            code = str(row.get("code") or row.get("symbol") or "").zfill(6)
-            if is_mainland_hs_symbol(code):
-                symbols.append({"symbol": code, "name": _clean_stock_name(row.get("name"), code)})
-        return symbols
+        symbols: dict[str, str] = {}
+        loaded_market = False
+        stocks = getattr(self.client, "stocks", None)
+        if callable(stocks):
+            for market in (SZ_MARKET, SH_MARKET):
+                try:
+                    data = stocks(market=market)
+                except TypeError:
+                    data = stocks(market)
+                except Exception:
+                    continue
+                loaded_market = True
+                for row in self._records(data):
+                    code = str(row.get("code") or row.get("symbol") or "").zfill(6)
+                    if is_mainland_hs_symbol(code) and _symbol_belongs_to_market(code, market):
+                        symbols[code] = _clean_stock_name(row.get("name"), code)
+        if not loaded_market:
+            data = self._call_first_available(["stock_all", "stocks"])
+            if data is None:
+                return []
+            for row in self._records(data):
+                code = str(row.get("code") or row.get("symbol") or "").zfill(6)
+                if is_mainland_hs_symbol(code):
+                    symbols.setdefault(code, _clean_stock_name(row.get("name"), code))
+        return [{"symbol": symbol, "name": name} for symbol, name in sorted(symbols.items())]
 
     def daily_bars(self, symbol: str, limit: int = 120) -> list[KLine]:
         frame = self.client.bars(symbol=symbol, frequency=9, offset=limit)
@@ -85,6 +112,9 @@ class MootdxProvider(MarketDataProvider):
                 except TypeError:
                     continue
         return None
+
+    def _records(self, data: Any) -> list[dict[str, Any]]:
+        return data.to_dict("records") if hasattr(data, "to_dict") else list(data)
 
 
 def _format_datetime_value(value: object) -> str:

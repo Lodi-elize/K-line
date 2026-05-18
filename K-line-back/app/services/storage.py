@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from app.core.models import AnnotatedBar, KLine, Signal
+from app.core.models import AnnotatedBar, KLine, Signal, SignalSeverity, SignalType
 from app.core.stock_scope import is_mainland_hs_symbol, normalize_mainland_hs_symbol
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
@@ -705,6 +705,44 @@ class Storage:
         with self.connect() as db:
             return [dict(row) for row in db.execute(query, params).fetchall()]
 
+    def signals_for_symbol_dates(self, symbol: str, trade_dates: Iterable[str]) -> dict[str, list[Signal]]:
+        if not is_mainland_hs_symbol(symbol):
+            return {}
+        dates = sorted({date[:10] for date in trade_dates if date})
+        if not dates:
+            return {}
+        placeholders = ",".join("?" for _ in dates)
+        with self.connect() as db:
+            rows = db.execute(
+                f"""
+                select symbol, trade_date, signal_type, severity, title, description, close, ma5, ma10, ma20
+                from signals
+                where symbol = ?
+                  and substr(trade_date, 1, 10) in ({placeholders})
+                order by trade_date, id
+                """,
+                [symbol, *dates],
+            ).fetchall()
+        grouped: dict[str, list[Signal]] = {}
+        for row in rows:
+            try:
+                signal = Signal(
+                    row["symbol"],
+                    row["trade_date"],
+                    SignalType(row["signal_type"]),
+                    SignalSeverity(row["severity"]),
+                    row["title"],
+                    row["description"],
+                    row["close"],
+                    row["ma5"],
+                    row["ma10"],
+                    row["ma20"],
+                )
+            except ValueError:
+                continue
+            grouped.setdefault(row["trade_date"][:10], []).append(signal)
+        return grouped
+
     def stock_statuses(
         self,
         limit: int = 10000,
@@ -878,18 +916,24 @@ class Storage:
             row = db.execute("select name from stocks where symbol = ? limit 1", (symbol,)).fetchone()
         return _clean_stock_name(row["name"] if row else None, symbol)
 
-    def klines_for_symbol(self, symbol: str, limit: int = 160) -> list[KLine]:
+    def klines_for_symbol(self, symbol: str, limit: int = 160, daily_only: bool = False) -> list[KLine]:
         if not is_mainland_hs_symbol(symbol):
             return []
         with self.connect() as db:
             rows = db.execute(
                 "select * from klines where symbol = ? order by trade_date desc limit ?",
-                (symbol, limit),
+                (symbol, limit * 3 if daily_only else limit),
             ).fetchall()
-        return [
+        klines = [
             KLine(row["symbol"], row["trade_date"], row["open"], row["high"], row["low"], row["close"], row["volume"])
             for row in reversed(rows)
         ]
+        if not daily_only:
+            return klines
+        by_day: dict[str, KLine] = {}
+        for row in klines:
+            by_day[row.date[:10]] = row
+        return list(by_day.values())[-limit:]
 
     def latest_scan(self) -> dict[str, Any] | None:
         with self.connect() as db:

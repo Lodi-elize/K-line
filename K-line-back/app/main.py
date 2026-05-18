@@ -12,11 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.history_range import HISTORY_RANGE_LIMITS, normalize_history_range, source_limit_for_range
-from app.core.models import AnnotatedBar, SignalType
+from app.core.models import AnnotatedBar, Signal, SignalType
 from app.core.signal_engine import SignalEngine
 from app.core.stock_scope import is_mainland_hs_symbol
 from app.providers.akshare_board_provider import AkshareBoardProvider
-from app.providers.fake import FakeMarketDataProvider
 from app.providers.mootdx_provider import MootdxProvider
 from app.services.notifier import DatabaseNotifier
 from app.services.scanner import ScannerService
@@ -34,11 +33,10 @@ engine = SignalEngine(settings.thresholds)
 
 def create_provider():
     if os.getenv("KLINE_PROVIDER", "").lower() == "fake":
+        from app.providers.fake import FakeMarketDataProvider
+
         return FakeMarketDataProvider()
-    try:
-        return MootdxProvider()
-    except Exception:
-        return FakeMarketDataProvider()
+    return MootdxProvider()
 
 
 def create_board_provider():
@@ -76,6 +74,27 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai") if BackgroundScheduler
 
 def beijing_timestamp() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).replace(microsecond=0).isoformat(sep=" ")
+
+
+def attach_stored_signals(symbol: str, annotated: list[AnnotatedBar]) -> list[AnnotatedBar]:
+    signals_by_date = storage.signals_for_symbol_dates(symbol, (item.kline.date for item in annotated))
+    if not signals_by_date:
+        return annotated
+
+    remaining = {date: list(signals) for date, signals in signals_by_date.items()}
+    merged: list[AnnotatedBar] = []
+    for item in annotated:
+        exact_signals = remaining.pop(item.kline.date, [])
+        day_signals: list[Signal] = []
+        day = item.kline.date[:10]
+        if item.kline.date == day:
+            day_signals = remaining.pop(day, [])
+        elif item == annotated[-1]:
+            day_signals = remaining.pop(day, [])
+        signals = [*item.signals, *exact_signals, *day_signals]
+        deduped = list({(signal.trade_date, signal.signal_type.value): signal for signal in signals}.values())
+        merged.append(AnnotatedBar(item.kline, item.ma5, item.ma10, item.ma20, deduped))
+    return merged
 
 
 async def send_module_sync_status(websocket: WebSocket) -> None:
@@ -200,7 +219,8 @@ def run_scan() -> dict[str, object]:
             "signal_count": latest.get("signal_count", 0),
             "message": "扫描正在运行，请稍后刷新进度。",
         }
-    threading.Thread(target=scanner.run_scan, daemon=True).start()
+    run_id = storage.start_scan()
+    threading.Thread(target=scanner.run_scan, args=(run_id,), daemon=True).start()
     return {"status": "running", "scanned_count": 0, "signal_count": 0, "message": "扫描已在后台启动。"}
 
 
@@ -274,16 +294,16 @@ def stock_history(symbol: str, range: str = Query("daily")) -> dict[str, object]
         return storage.annotated_history(symbol, [])
     normalized_range = normalize_history_range(range)
     source_limit = source_limit_for_range(normalized_range)
-    rows = storage.klines_for_symbol(symbol, limit=source_limit)
+    rows = storage.klines_for_symbol(symbol, limit=source_limit, daily_only=normalized_range != "daily")
     if normalized_range == "daily":
         latest_trade_date = rows[-1].date if rows else None
         intraday_rows = provider.intraday_bars(symbol, limit=240, trade_date=latest_trade_date)
         if intraday_rows:
             annotated = [AnnotatedBar(item.kline, item.ma5, item.ma10, item.ma20, []) for item in engine.annotate(intraday_rows)]
-            return storage.annotated_history(symbol, annotated)
+            return storage.annotated_history(symbol, attach_stored_signals(symbol, annotated))
 
     if not rows:
         rows = provider.daily_bars(symbol, limit=source_limit)
         storage.upsert_klines(rows)
     annotated = engine.annotate(rows)
-    return storage.annotated_history(symbol, annotated[-HISTORY_RANGE_LIMITS[normalized_range]:])
+    return storage.annotated_history(symbol, attach_stored_signals(symbol, annotated[-HISTORY_RANGE_LIMITS[normalized_range]:]))

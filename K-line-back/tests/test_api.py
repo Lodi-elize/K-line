@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
 os.environ["KLINE_PROVIDER"] = "fake"
+os.environ.pop("KLINE_DATABASE_URL", None)
 
 from fastapi.testclient import TestClient
 
@@ -12,16 +14,56 @@ from app.core.models import KLine, Signal, SignalSeverity, SignalType
 from app.core.config import settings
 from app.main import app
 from app.providers.akshare_board_provider import AkshareBoardProvider
+from app.providers.mootdx_provider import MootdxProvider
 from app.services.storage import Storage
 
 
 client = TestClient(app)
 
 
+class FakeFrame:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+
+    def to_dict(self, orient: str) -> list[dict[str, Any]]:
+        assert orient == "records"
+        return self.rows
+
+
 def test_health_and_config() -> None:
     assert client.get("/api/health").json() == {"status": "ok"}
     config = client.get("/api/config").json()
     assert config["thresholds"]
+
+
+def test_mootdx_provider_keeps_symbol_from_own_market() -> None:
+    class FakeMootdxClient:
+        def stocks(self, market: int = 1) -> FakeFrame:
+            if market == 0:
+                return FakeFrame(
+                    [
+                        {"code": "000062", "name": "深圳华强"},
+                        {"code": "300001", "name": "创业样例"},
+                        {"code": "395001", "name": "主板Ａ股"},
+                    ]
+                )
+            return FakeFrame(
+                [
+                    {"code": "000062", "name": "上证沪企"},
+                    {"code": "600001", "name": "沪市样例"},
+                ]
+            )
+
+    provider = MootdxProvider.__new__(MootdxProvider)
+    provider.client = FakeMootdxClient()
+
+    rows = provider.list_symbols()
+    by_symbol = {row["symbol"]: row["name"] for row in rows}
+
+    assert by_symbol["000062"] == "深圳华强"
+    assert by_symbol["300001"] == "创业样例"
+    assert by_symbol["600001"] == "沪市样例"
+    assert "395001" not in by_symbol
 
 
 def test_manual_scan_and_history() -> None:
@@ -71,6 +113,23 @@ def test_storage_normalizes_kline_ohlc(tmp_path) -> None:
     rows = storage.klines_for_symbol("600001", limit=1)
     assert rows[0].high == 12
     assert rows[0].low == 8
+
+
+def test_storage_can_return_one_daily_kline_per_trade_day(tmp_path) -> None:
+    storage = Storage(tmp_path / "test.db")
+    storage.upsert_klines(
+        [
+            KLine("600001", "2026-05-14", open=10, high=11, low=9, close=10.5, volume=100),
+            KLine("600001", "2026-05-14 15:00", open=10, high=11, low=9, close=10.6, volume=101),
+            KLine("600001", "2026-05-15", open=11, high=12, low=10, close=11.5, volume=200),
+            KLine("600001", "2026-05-15 15:00", open=11, high=12, low=10, close=11.6, volume=201),
+        ]
+    )
+
+    rows = storage.klines_for_symbol("600001", limit=22, daily_only=True)
+
+    assert [row.date for row in rows] == ["2026-05-14 15:00", "2026-05-15 15:00"]
+    assert [row.close for row in rows] == [10.6, 11.6]
 
 
 def test_storage_replaces_akshare_concept_modules(tmp_path) -> None:
@@ -215,6 +274,19 @@ def test_storage_updates_existing_signal_on_conflict(tmp_path) -> None:
     [signal] = storage.latest_signals(limit=1)
     assert signal["severity"] == "watch"
     assert signal["title"] == "观察"
+
+
+def test_storage_loads_signals_for_history_dates(tmp_path) -> None:
+    storage = Storage(tmp_path / "test.db")
+    storage.upsert_stocks([{"symbol": "600001", "name": "沪市样例"}])
+    entry = Signal("600001", "2026-05-15", SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK, SignalSeverity.ENTRY, "进场", "进场规则", 10, None, None, None)
+    watch = Signal("600001", "2026-05-16 10:30", SignalType.FIVE_MA_TURN_UP, SignalSeverity.WATCH, "观察", "观察规则", 11, None, None, None)
+    storage.upsert_signals([entry, watch])
+
+    signals = storage.signals_for_symbol_dates("600001", ["2026-05-15", "2026-05-16 14:30"])
+
+    assert [signal.title for signal in signals["2026-05-15"]] == ["进场"]
+    assert [signal.title for signal in signals["2026-05-16"]] == ["观察"]
 
 
 def test_storage_groups_all_three_prefix_symbols_as_chinext(tmp_path) -> None:

@@ -35,8 +35,8 @@ class ScannerService:
         self.max_symbols = max_symbols
         self.board_provider = board_provider
 
-    def run_scan(self) -> ScanResult:
-        run_id = self.storage.start_scan()
+    def run_scan(self, run_id: int | None = None) -> ScanResult:
+        run_id = run_id or self.storage.start_scan()
         scanned_count = 0
         signal_count = 0
         warnings: list[str] = []
