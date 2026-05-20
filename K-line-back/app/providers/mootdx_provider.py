@@ -25,13 +25,13 @@ def _symbol_belongs_to_market(symbol: str, market: int) -> bool:
     return False
 
 
-def _normalized_kline(symbol: str, date: str, open_price: float, high: float, low: float, close: float, volume: float) -> KLine | None:
+def _normalized_kline(symbol: str, date: str, open_price: float, high: float, low: float, close: float, volume: float, change_pct: float | None = None) -> KLine | None:
     prices = [open_price, high, low, close]
     if any(price <= 0 for price in prices):
         return None
     normalized_high = max(prices)
     normalized_low = min(prices)
-    return KLine(symbol=symbol, date=date, open=open_price, high=normalized_high, low=normalized_low, close=close, volume=volume)
+    return KLine(symbol=symbol, date=date, open=open_price, high=normalized_high, low=normalized_low, close=close, volume=volume, change_pct=change_pct)
 
 
 class MootdxProvider(MarketDataProvider):
@@ -84,12 +84,29 @@ class MootdxProvider(MarketDataProvider):
         records = frame.to_dict("records") if hasattr(frame, "to_dict") else list(frame)
         minute_times = _trading_minute_labels(trade_date, len(records)) if synthesize_minutes else []
         rows: list[KLine] = []
+        previous_close: float | None = None
         for index, row in enumerate(records):
             date_value = row.get("datetime") or row.get("date") or row.get("time") or (minute_times[index] if index < len(minute_times) else "")
             open_price = float(row.get("open") or row.get("price") or row.get("close"))
             high = float(row.get("high") or row.get("price") or row.get("close") or open_price)
             low = float(row.get("low") or row.get("price") or row.get("close") or open_price)
             close = float(row.get("close") or row.get("price") or open_price)
+            raw_change = next(
+                (
+                    value
+                    for value in (row.get("change_pct"), row.get("change_percent"), row.get("涨跌幅"))
+                    if value is not None
+                ),
+                None,
+            )
+            if raw_change is not None:
+                change_pct = float(raw_change)
+                if abs(change_pct) > 1:
+                    change_pct /= 100
+            elif previous_close:
+                change_pct = round((close - previous_close) / previous_close, 6)
+            else:
+                change_pct = None
             kline = _normalized_kline(
                 symbol=symbol,
                 date=_format_datetime_value(date_value),
@@ -98,9 +115,11 @@ class MootdxProvider(MarketDataProvider):
                 low=low,
                 close=close,
                 volume=float(row.get("vol") or row.get("volume") or 0),
+                change_pct=change_pct,
             )
             if kline is not None:
                 rows.append(kline)
+                previous_close = kline.close
         return rows
 
     def _call_first_available(self, names: list[str]) -> Any | None:

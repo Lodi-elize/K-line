@@ -33,6 +33,7 @@ export type KLineBar = {
   low: number;
   close: number;
   volume: number;
+  change_pct?: number | null;
   ma5?: number | null;
   ma10?: number | null;
   ma20?: number | null;
@@ -44,7 +45,7 @@ export type KLineBar = {
   }>;
 };
 
-export type HistoryRange = "daily" | "monthly" | "yearly";
+export type HistoryRange = "hourly" | "daily" | "weekly" | "monthly";
 
 export type HistoryResponse = {
   symbol: string;
@@ -72,6 +73,16 @@ export type ModuleSyncStatus = {
   started_at?: string | null;
   finished_at?: string | null;
   updated_count: number;
+  message?: string;
+};
+
+export type SignalRecomputeStatus = {
+  status: "idle" | "running" | "success" | "failed" | string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  total_symbols: number;
+  processed_symbols: number;
+  signal_count: number;
   message?: string;
 };
 

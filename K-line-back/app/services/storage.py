@@ -33,7 +33,20 @@ def _normalized_kline(row: KLine) -> KLine | None:
         low=min(prices),
         close=row.close,
         volume=row.volume,
+        change_pct=row.change_pct,
     )
+
+
+def _with_computed_change_pct(rows: list[KLine]) -> list[KLine]:
+    previous_close: float | None = None
+    computed: list[KLine] = []
+    for row in sorted(rows, key=lambda item: item.date):
+        change_pct = row.change_pct
+        if change_pct is None and previous_close:
+            change_pct = round((row.close - previous_close) / previous_close, 6)
+        computed.append(KLine(row.symbol, row.date, row.open, row.high, row.low, row.close, row.volume, change_pct))
+        previous_close = row.close
+    return computed
 
 
 def _clean_stock_name(value: str | None, fallback: str) -> str:
@@ -174,6 +187,9 @@ class Storage:
 
         parsed = urlparse(self.database_url or "")
         query = parse_qs(parsed.query)
+        connect_timeout = int(query.get("connect_timeout", ["8"])[0])
+        read_timeout = int(query.get("read_timeout", [str(connect_timeout)])[0])
+        write_timeout = int(query.get("write_timeout", [str(connect_timeout)])[0])
         return pymysql.connect(
             host=parsed.hostname or "127.0.0.1",
             port=parsed.port or 3306,
@@ -181,6 +197,9 @@ class Storage:
             password=unquote(parsed.password or ""),
             database=parsed.path.lstrip("/"),
             charset=query.get("charset", ["utf8mb4"])[0],
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
+            write_timeout=write_timeout,
             autocommit=False,
             cursorclass=pymysql.cursors.DictCursor,
         )
@@ -251,18 +270,19 @@ class Storage:
     def _upsert_klines_sql(self) -> str:
         if self.dialect == "sqlite":
             return """
-                insert or replace into klines(symbol, trade_date, open, high, low, close, volume)
-                values(?, ?, ?, ?, ?, ?, ?)
+                insert or replace into klines(symbol, trade_date, open, high, low, close, volume, change_pct)
+                values(?, ?, ?, ?, ?, ?, ?, ?)
             """
         return """
-            insert into klines(symbol, trade_date, open, high, low, close, volume)
-            values(?, ?, ?, ?, ?, ?, ?)
+            insert into klines(symbol, trade_date, open, high, low, close, volume, change_pct)
+            values(?, ?, ?, ?, ?, ?, ?, ?)
             on duplicate key update
                 open = values(open),
                 high = values(high),
                 low = values(low),
                 close = values(close),
-                volume = values(volume)
+                volume = values(volume),
+                change_pct = values(change_pct)
         """
 
     def _upsert_signals_sql(self) -> str:
@@ -315,6 +335,7 @@ class Storage:
                     low real not null,
                     close real not null,
                     volume real not null,
+                    change_pct real,
                     primary key (symbol, trade_date)
                 );
                 create table if not exists signals (
@@ -365,7 +386,18 @@ class Storage:
                 );
                 """
             )
+            self._ensure_schema_columns(db)
             self._init_indexes(db)
+
+    def _ensure_schema_columns(self, db: StorageConnection) -> None:
+        if self.dialect == "sqlite":
+            columns = {row["name"] for row in db.execute("pragma table_info(klines)").fetchall()}
+            if "change_pct" not in columns:
+                db.execute("alter table klines add column change_pct real")
+            return
+        rows = db.execute("show columns from klines like 'change_pct'").fetchall()
+        if not rows:
+            db.execute("alter table klines add column change_pct real null")
 
     def _init_indexes(self, db: StorageConnection) -> None:
         indexes = [
@@ -630,11 +662,12 @@ class Storage:
             return len(chain_members)
 
     def upsert_klines(self, rows: list[KLine]) -> None:
-        normalized_rows = [item for row in rows if (symbol := normalize_mainland_hs_symbol(row.symbol)) and (item := _normalized_kline(KLine(symbol, row.date, row.open, row.high, row.low, row.close, row.volume))) is not None]
+        normalized_rows = [item for row in rows if (symbol := normalize_mainland_hs_symbol(row.symbol)) and (item := _normalized_kline(KLine(symbol, row.date, row.open, row.high, row.low, row.close, row.volume, row.change_pct))) is not None]
+        normalized_rows = _with_computed_change_pct(normalized_rows)
         with self.connect() as db:
             db.executemany(
                 self._upsert_klines_sql(),
-                [(row.symbol, row.date, row.open, row.high, row.low, row.close, row.volume) for row in normalized_rows],
+                [(row.symbol, row.date, row.open, row.high, row.low, row.close, row.volume, row.change_pct) for row in normalized_rows],
             )
 
     def upsert_signals(self, signals: list[Signal]) -> int:
@@ -642,6 +675,120 @@ class Storage:
         with self.connect() as db:
             for signal in signals:
                 if not is_mainland_hs_symbol(signal.symbol):
+                    continue
+                cursor = db.execute(
+                    self._upsert_signals_sql(),
+                    (
+                        signal.symbol,
+                        signal.trade_date,
+                        signal.signal_type.value,
+                        signal.severity.value,
+                        signal.title,
+                        signal.description,
+                        signal.close,
+                        signal.ma5,
+                        signal.ma10,
+                        signal.ma20,
+                    ),
+                )
+                inserted += cursor.rowcount
+        return inserted
+
+    def symbols_with_klines(self) -> list[str]:
+        with self.connect() as db:
+            rows = db.execute(
+                f"""
+                select distinct symbol
+                from klines
+                where {self._hs_symbol_clause}
+                order by symbol
+                """
+            ).fetchall()
+        return [row["symbol"] for row in rows if is_mainland_hs_symbol(row["symbol"])]
+
+    def daily_klines_for_recompute(self, symbol: str) -> list[KLine]:
+        normalized_symbol = normalize_mainland_hs_symbol(symbol)
+        if not normalized_symbol:
+            return []
+        with self.connect() as db:
+            rows = db.execute(
+                "select * from klines where symbol = ? order by trade_date asc",
+                (normalized_symbol,),
+            ).fetchall()
+        by_day: dict[str, KLine] = {}
+        for row in rows:
+            normalized = _normalized_kline(
+                KLine(
+                    row["symbol"],
+                    row["trade_date"],
+                    row["open"],
+                    row["high"],
+                    row["low"],
+                    row["close"],
+                    row["volume"],
+                    row["change_pct"] if "change_pct" in row.keys() else None,
+                )
+            )
+            if normalized is not None:
+                by_day[normalized.date[:10]] = normalized
+        return _with_computed_change_pct(list(by_day.values()))
+
+    def replace_entry_exit_signals_for_symbol(self, symbol: str, signals: list[Signal]) -> int:
+        normalized_symbol = normalize_mainland_hs_symbol(symbol)
+        if not normalized_symbol:
+            return 0
+        entry_exit_signals = [
+            signal
+            for signal in signals
+            if signal.symbol == normalized_symbol and signal.severity in {SignalSeverity.ENTRY, SignalSeverity.EXIT}
+        ]
+        inserted = 0
+        with self.connect() as db:
+            db.execute(
+                "delete from signals where symbol = ? and severity in ('entry', 'exit')",
+                (normalized_symbol,),
+            )
+            for signal in entry_exit_signals:
+                cursor = db.execute(
+                    self._upsert_signals_sql(),
+                    (
+                        signal.symbol,
+                        signal.trade_date,
+                        signal.signal_type.value,
+                        signal.severity.value,
+                        signal.title,
+                        signal.description,
+                        signal.close,
+                        signal.ma5,
+                        signal.ma10,
+                        signal.ma20,
+                    ),
+                )
+                inserted += cursor.rowcount
+        return inserted
+
+    def replace_latest_signals(self, symbol: str, signals: list[Signal]) -> int:
+        normalized_symbol = normalize_mainland_hs_symbol(symbol)
+        if not normalized_symbol:
+            return 0
+        signal_dates = sorted({signal.trade_date for signal in signals if signal.symbol == normalized_symbol})
+        inserted = 0
+        with self.connect() as db:
+            if signal_dates:
+                placeholders = ",".join("?" for _ in signal_dates)
+                db.execute(
+                    f"delete from signals where symbol = ? and trade_date in ({placeholders})",
+                    [normalized_symbol, *signal_dates],
+                )
+            else:
+                latest = db.execute(
+                    "select max(trade_date) as trade_date from klines where symbol = ?",
+                    (normalized_symbol,),
+                ).fetchone()
+                if latest and latest["trade_date"]:
+                    db.execute("delete from signals where symbol = ? and trade_date = ?", (normalized_symbol, latest["trade_date"]))
+            for signal in signals:
+                if signal.symbol != normalized_symbol:
                     continue
                 cursor = db.execute(
                     self._upsert_signals_sql(),
@@ -925,9 +1072,10 @@ class Storage:
                 (symbol, limit * 3 if daily_only else limit),
             ).fetchall()
         klines = [
-            KLine(row["symbol"], row["trade_date"], row["open"], row["high"], row["low"], row["close"], row["volume"])
+            KLine(row["symbol"], row["trade_date"], row["open"], row["high"], row["low"], row["close"], row["volume"], row["change_pct"] if "change_pct" in row.keys() else None)
             for row in reversed(rows)
         ]
+        klines = _with_computed_change_pct(klines)
         if not daily_only:
             return klines
         by_day: dict[str, KLine] = {}
@@ -978,6 +1126,7 @@ class Storage:
                     "low": item.kline.low,
                     "close": item.kline.close,
                     "volume": item.kline.volume,
+                    "change_pct": item.kline.change_pct,
                     "ma5": item.ma5,
                     "ma10": item.ma10,
                     "ma20": item.ma20,

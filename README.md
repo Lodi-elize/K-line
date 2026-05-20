@@ -4,6 +4,19 @@
 
 本项目只做行情分析和信号提示，不做交易、不下单。
 
+## 当前实现要点
+
+- 前端固定运行在 `8081`，后端固定运行在 `9091`；前端开发服务和 Nginx 都会把 `/api` 与 `/ws` 代理到后端。
+- 默认数据源使用真实行情和远端 MySQL；`KLINE_PROVIDER=fake` 只用于本地测试/演示，远端数据库模式会阻止 fake 行情源写入真实库。
+- 全市场扫描只负责股票列表、日 K 数据、均线信号和扫描状态，不再在扫描过程中同步概念模块。
+- 扫描状态通过 `WS /ws/scan/status` 主动推送；`GET /api/scan/status` 仍保留用于读取最近一次状态。
+- “更新模块”是独立功能，负责东方财富/AkShare 概念模块同步、概念归属写入和产业链回填，进度通过 `WS /ws/modules/sync` 推送。
+- K 线数据包含 `change_pct` 涨跌幅；`mootdx` 未直接提供时由后端按前后收盘价计算，旧数据读取时也会补算。
+- 当前唯一进场信号是“连板回踩10日线”：10 个交易日内出现连续两天涨停，随后触碰/接近 10 日均线、收盘未有效跌破 10 日均线，且当前日不是涨停日。该规则已忽略缩量条件。
+- 涨停判断使用 `change_pct >= limit_up_pct`，当前 `limit_up_pct = 0.09`。
+- 图表维度当前只开放“日 / 周 / 月”；“时”维度已暂时关闭，直接请求 `hourly/hour/h` 会按日维度返回。
+- 周/月维度会把一周/一月数据聚合成一个 K 线点和一个箱体；有多少个箱体就有多少个 K 线点。
+
 ## 功能
 
 - 沪深 A 股日线扫描，仅保留 `0`、`3`、`6` 开头股票代码。
@@ -54,20 +67,20 @@
 cd K-line-back
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 9091
 ```
 
 健康检查：
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:8000/api/health
+Invoke-WebRequest http://127.0.0.1:9091/api/health
 ```
 
 开发或演示时可强制使用 fake 数据源，避免依赖 mootdx 实时连通性：
 
 ```powershell
 $env:KLINE_PROVIDER="fake"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 9091
 ```
 
 ## 启动前端
@@ -81,10 +94,10 @@ npm run dev
 打开：
 
 ```text
-http://127.0.0.1:5173
+http://127.0.0.1:8081
 ```
 
-前端开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`。
+前端开发服务器会把 `/api` 和 `/ws` 代理到 `http://127.0.0.1:9091`。
 
 ## Docker 服务器部署
 
@@ -95,9 +108,8 @@ http://127.0.0.1:5173
 
 ### 端口
 
-- `80`：前端页面入口，必须开放。
-- `8001`：后端 API 可选直连端口。页面访问不依赖公网开放 `8001`，因为前端 Nginx 会把 `/api` 和 `/ws` 反代到后端容器。
-- `8000`：后端容器内部端口，不需要对公网开放。
+- `8081`：前端页面入口，必须开放。
+- `9091`：后端 API 可选直连端口。页面访问不依赖公网开放 `9091`，因为前端 Nginx 会把 `/api` 和 `/ws` 反代到后端容器。
 
 ### 股票池范围
 
@@ -121,8 +133,8 @@ vi .env
 生产环境建议使用远端 MySQL：
 
 ```env
-WEB_PORT=80
-BACKEND_PORT=8001
+WEB_PORT=8081
+BACKEND_PORT=9091
 KLINE_DATABASE_URL=mysql+pymysql://用户名:密码@数据库主机:端口/kLineDB?charset=utf8mb4
 KLINE_SYNC_CONCEPTS=true
 KLINE_PROVIDER=
@@ -130,8 +142,8 @@ KLINE_PROVIDER=
 
 说明：
 
-- `WEB_PORT`：网页暴露端口，默认 `80`。
-- `BACKEND_PORT`：后端 API 可选暴露端口，默认 `8001`；前端反代不依赖公网访问这个端口。
+- `WEB_PORT`：网页暴露端口，默认 `8081`。
+- `BACKEND_PORT`：后端 API 可选暴露端口，默认 `9091`；前端反代不依赖公网访问这个端口。
 - `KLINE_DATABASE_URL`：MySQL 连接串。不要提交真实密码。
 - `KLINE_SYNC_CONCEPTS`：是否允许概念模块同步，默认开启。
 - `KLINE_PROVIDER`：留空使用真实行情；填 `fake` 只用于冒烟测试。
@@ -202,7 +214,7 @@ docker compose up -d --build
 外部访问：
 
 ```text
-http://服务器IP/
+http://服务器IP:8081/
 http://服务器IP/api/health
 ```
 
@@ -210,7 +222,7 @@ http://服务器IP/api/health
 
 ```bash
 curl http://127.0.0.1/api/health
-curl http://127.0.0.1:8001/api/health
+curl http://127.0.0.1:9091/api/health
 ```
 
 返回 `{"status":"ok"}` 表示后端正常。
@@ -283,7 +295,7 @@ rm -rf /opt/k-line-observation
 rm -f /tmp/k-line-images.tar /tmp/k-line-docker-compose.yml /tmp/k-line-observation-deploy.tar.gz
 ```
 
-如果 `http://服务器IP/` 可访问，但 `http://服务器IP:8001/api/health` 不通，通常是安全组没有开放 `8001`。这不影响网页正常使用。
+如果 `http://服务器IP:8081/` 可访问，但 `http://服务器IP:9091/api/health` 不通，通常是安全组没有开放 `9091`。这不影响网页正常使用。
 
 ## 验证
 
@@ -350,7 +362,9 @@ K-line-back/app/core/config.py
 主要参数：
 
 - `touch_tolerance_pct`：均线触碰容忍度。
+- `limit_up_pct`：涨停涨幅阈值，使用 K 线 `change_pct` 涨跌幅判断。
 - `break_tolerance_pct`：回踩跌破容忍度。
+- `double_limit_lookback_days`：进场规则查找连续两天涨停的回看窗口。
 - `upward_slope_pct`：上拐斜率阈值。
 - `downward_slope_pct`：下拐斜率阈值。
 - `slope_lookback_days`：斜率确认天数。
@@ -365,6 +379,7 @@ K-line-back/app/core/config.py
 - `GET /api/config`：查看算法配置说明。
 - `GET /api/scan/status`：查看最近一次扫描状态。
 - `POST /api/scan/run`：手动触发扫描。
+- `WS /ws/scan/status`：订阅扫描状态推送。
 - `GET /api/signals`：获取最新信号。
 - `GET /api/stock-statuses`：获取全股票状态列表，支持 `severity`、`module_id`。
 - `GET /api/modules`：获取市场、产业链、概念等模块。

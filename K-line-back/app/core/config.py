@@ -19,7 +19,12 @@ def _load_env_file(path: Path) -> None:
             os.environ[key] = value
 
 
-_load_env_file(Path(__file__).resolve().parents[2] / ".env")
+APP_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = APP_ROOT.parent
+
+if os.getenv("KLINE_SKIP_ENV_FILE", "").lower() not in {"1", "true", "yes", "on"}:
+    _load_env_file(PROJECT_ROOT / ".env")
+    _load_env_file(APP_ROOT / ".env")
 
 
 @dataclass(frozen=True)
@@ -34,7 +39,7 @@ class SignalThresholds:
 
     # Daily close gain that is treated as a limit-up day.
     # Unit: decimal ratio.
-    limit_up_pct: float = 0.07
+    limit_up_pct: float = 0.09
 
     # Current volume must be below this ratio of the average volume of the consecutive limit-up days.
     # Unit: decimal ratio. Lower values require a stronger volume contraction on pullback.
@@ -42,7 +47,7 @@ class SignalThresholds:
 
     # Allowed intraday pierce below an MA during a "pullback hold" check.
     # Unit: decimal ratio of MA value. Lower values reject more noisy pullbacks.
-    break_tolerance_pct: float = 0.001
+    break_tolerance_pct: float = 0.03
 
     # Minimum MA slope over the lookback window to call the line "turning upward".
     # Unit: decimal ratio. Higher values require stronger upward movement and reduce entry signals.

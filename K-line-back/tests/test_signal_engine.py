@@ -66,12 +66,33 @@ def test_detects_double_limit_up_ten_ma_pullback_entry() -> None:
     assert [signal.signal_type for signal in entries] == [SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK]
 
 
-def test_treats_seven_percent_gain_as_limit_up_for_entry() -> None:
+def test_requires_ten_percent_gain_for_limit_up_entry() -> None:
     closes = [10.0] * 10 + [10.8, 11.6, 10.9]
     rows = make_rows(closes)
     rows[10] = KLine("600001", rows[10].date, 10.1, 10.8, 10.1, 10.8, 5000)
     rows[11] = KLine("600001", rows[11].date, 10.9, 11.6, 10.9, 11.6, 5200)
     rows[12] = KLine("600001", rows[12].date, 11.2, 11.3, 10.30, 10.47, 2500)
+
+    annotated = SignalEngine(SignalThresholds()).annotate(rows)
+    entries = [signal for bar in annotated for signal in bar.signals if signal.severity.value == "entry"]
+
+    assert entries == []
+
+    rows[10] = KLine("600001", rows[10].date, 10.2, 11.0, 10.2, 11.0, 5000)
+    rows[11] = KLine("600001", rows[11].date, 11.2, 12.1, 11.2, 12.1, 5200)
+    rows[12] = KLine("600001", rows[12].date, 12.0, 12.2, 10.40, 10.55, 2500)
+
+    annotated = SignalEngine(SignalThresholds()).annotate(rows)
+    entries = [signal for bar in annotated for signal in bar.signals if signal.severity.value == "entry"]
+
+    assert [signal.signal_type for signal in entries] == [SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK]
+
+
+def test_limit_up_uses_precomputed_change_pct() -> None:
+    rows = make_rows([10.0] * 10 + [10.5, 11.0, 10.4])
+    rows[10] = KLine("600001", rows[10].date, 10.1, 10.5, 10.1, 10.5, 5000, change_pct=0.1)
+    rows[11] = KLine("600001", rows[11].date, 10.9, 11.0, 10.9, 11.0, 5200, change_pct=0.1)
+    rows[12] = KLine("600001", rows[12].date, 11.2, 11.3, 10.12, 10.35, 2500, change_pct=-0.02)
 
     annotated = SignalEngine(SignalThresholds()).annotate(rows)
     entries = [signal for bar in annotated for signal in bar.signals if signal.severity.value == "entry"]
@@ -88,5 +109,6 @@ def test_detects_ten_and_twenty_ma_breaks() -> None:
 
 def test_config_items_are_documented() -> None:
     items = SignalThresholds().as_documented_items()
-    assert {item["key"] for item in items} >= {"touch_tolerance_pct", "arrangement_spread_pct", "double_limit_lookback_days", "limit_up_pct", "pullback_volume_shrink_ratio"}
+    assert {item["key"] for item in items} >= {"touch_tolerance_pct", "arrangement_spread_pct", "double_limit_lookback_days", "limit_up_pct"}
+    assert SignalThresholds().break_tolerance_pct == 0.03
     assert all(item["description"] and item["unit"] for item in items)

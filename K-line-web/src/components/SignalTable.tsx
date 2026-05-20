@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Signal } from "../types/api";
 import { severityLabel, signalTypeLabel } from "../types/labels";
 
@@ -33,7 +34,7 @@ function moduleTypeLabel(type: string) {
   return labels[type] || type;
 }
 
-export function SignalTable({ signals, selectedSymbol, updatedAt, onSelectSymbol }: Props) {
+function SignalTableComponent({ signals, selectedSymbol, updatedAt, onSelectSymbol }: Props) {
   return (
     <div className="panel table-panel">
       <div className="table-header">
@@ -92,3 +93,5 @@ export function SignalTable({ signals, selectedSymbol, updatedAt, onSelectSymbol
     </div>
   );
 }
+
+export const SignalTable = memo(SignalTableComponent);

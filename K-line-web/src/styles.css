@@ -167,6 +167,25 @@ select {
   background: #fef2f2;
 }
 
+.signal-recompute-status.running,
+.signal-recompute-log.running {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.signal-recompute-status.success,
+.signal-recompute-log.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.signal-recompute-status.failed,
+.signal-recompute-log.failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
 .module-sync-log {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -403,6 +422,36 @@ select {
   background: #ffffff;
   border: 1px solid #d7dde5;
   border-radius: 8px;
+}
+
+.signal-table-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.table-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  border: 1px solid rgba(215, 221, 229, 0.82);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.82);
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 700;
+  backdrop-filter: blur(2px);
+}
+
+.table-loading span {
+  padding: 6px 10px;
+  border: 1px solid #ccfbf1;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
 }
 
 .panel-title {
@@ -825,7 +874,8 @@ button.signal-row:hover,
 
 .chart-metrics {
   display: grid;
-  grid-template-columns: repeat(4, max-content);
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
   gap: 6px;
   max-width: 100%;
   overflow-x: auto;
@@ -835,17 +885,19 @@ button.signal-row:hover,
   display: grid;
   justify-items: end;
   gap: 6px;
-  min-width: 0;
+  min-width: 118px;
 }
 
 .period-switch {
   display: inline-grid;
-  grid-template-columns: repeat(3, 34px);
+  grid-auto-flow: column;
+  grid-auto-columns: 34px;
   height: 30px;
   padding: 2px;
   border: 1px solid #d7dde5;
   border-radius: 6px;
   background: #f8fafc;
+  white-space: nowrap;
 }
 
 .period-switch button {
@@ -913,7 +965,7 @@ button.signal-row:hover,
 }
 
 .chart-legend .close {
-  background: #111827;
+  background: #0f172a;
 }
 
 .chart-legend .ma5 {
@@ -962,7 +1014,7 @@ button.signal-row:hover,
 
 .chart-legend .candle.up {
   border: 1px solid #dc2626;
-  background: #fee2e2;
+  background: #fff7f7;
   color: #dc2626;
 }
 
@@ -1149,6 +1201,6 @@ button.signal-row:hover,
   .chart-side {
     justify-items: start;
     margin-top: 12px;
-    min-width: 0;
+    min-width: 152px;
   }
 }

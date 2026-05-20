@@ -35,6 +35,7 @@ class KLine:
     low: float
     close: float
     volume: float = 0.0
+    change_pct: float | None = None
 
 
 @dataclass(frozen=True)

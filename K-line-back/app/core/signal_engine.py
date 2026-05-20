@@ -79,8 +79,8 @@ class SignalEngine:
                     row,
                     SignalType.DOUBLE_LIMIT_UP_TEN_MA_PULLBACK,
                     SignalSeverity.ENTRY,
-                    "连板缩量回踩10日线",
-                    "十个交易日内出现连续两天涨停，随后缩量回调并触及10日均线附近。",
+                    "连板回踩10日线",
+                    "十个交易日内出现连续两天涨停，随后回调并触及10日均线附近。",
                     current_ma5,
                     current_ma10,
                     current_ma20,
@@ -157,12 +157,8 @@ class SignalEngine:
         pair = self._recent_consecutive_limit_up_pair(rows, index)
         if pair is None:
             return False
-        first, second = pair
-        limit_avg_volume = (rows[first].volume + rows[second].volume) / 2
-        if limit_avg_volume <= 0:
-            return False
-        volume_shrunk = row.volume <= limit_avg_volume * self.thresholds.pullback_volume_shrink_ratio
-        return volume_shrunk and index > second and not self._is_limit_up(rows, index)
+        _, second = pair
+        return index > second and not self._is_limit_up(rows, index)
 
     def _recent_consecutive_limit_up_pair(self, rows: list[KLine], index: int) -> tuple[int, int] | None:
         window_start = max(1, index - self.thresholds.double_limit_lookback_days + 1)
@@ -173,12 +169,15 @@ class SignalEngine:
         return None
 
     def _is_limit_up(self, rows: list[KLine], index: int) -> bool:
+        if rows[index].change_pct is not None:
+            return round(rows[index].change_pct, 6) >= self.thresholds.limit_up_pct
         if index <= 0:
             return False
         previous_close = rows[index - 1].close
         if previous_close <= 0:
             return False
-        return (rows[index].close - previous_close) / previous_close >= self.thresholds.limit_up_pct
+        gain = round((rows[index].close - previous_close) / previous_close, 6)
+        return gain >= self.thresholds.limit_up_pct
 
     def _is_five_ma_pullback_hold(self, row: KLine, previous: KLine, ma5: float | None, ma10: float | None, previous_ma5: float | None) -> bool:
         if ma5 is None or ma10 is None or previous_ma5 is None or ma5 <= ma10:

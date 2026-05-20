@@ -1,12 +1,13 @@
-import { Activity, Check, ChevronDown, Filter, Layers, Play, RefreshCw, RotateCcw, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Activity, Check, ChevronDown, Filter, Layers, Play, RefreshCw, RotateCcw, Search, Wand2 } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "./api/client";
-import { KLineChart } from "./components/KLineChart";
 import { SignalTable } from "./components/SignalTable";
-import type { ConfigItem, HistoryRange, HistoryResponse, ModuleSyncStatus, ScanStatus, Signal, StockModule } from "./types/api";
+import type { ConfigItem, HistoryRange, HistoryResponse, ModuleSyncStatus, ScanStatus, Signal, SignalRecomputeStatus, StockModule } from "./types/api";
 import { statusLabel } from "./types/labels";
 import "./styles.css";
+
+const KLineChart = lazy(() => import("./components/KLineChart").then((module) => ({ default: module.KLineChart })));
 
 type SelectOption = {
   value: string;
@@ -57,6 +58,16 @@ function moduleSyncLabel(status?: string) {
 function moduleSyncSocketUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws/modules/sync`;
+}
+
+function signalRecomputeSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/ws/signals/recompute/status`;
+}
+
+function scanStatusSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/ws/scan/status`;
 }
 
 function FilterSelect({ label, value, options, wide = false, onChange }: FilterSelectProps) {
@@ -111,6 +122,7 @@ function App() {
   const [history, setHistory] = useState<HistoryResponse | null>(null);
   const [status, setStatus] = useState<ScanStatus | null>(null);
   const [moduleSync, setModuleSync] = useState<ModuleSyncStatus | null>(null);
+  const [signalRecompute, setSignalRecompute] = useState<SignalRecomputeStatus | null>(null);
   const [config, setConfig] = useState<ConfigItem[]>([]);
   const [modules, setModules] = useState<StockModule[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState("");
@@ -118,10 +130,15 @@ function App() {
   const [severity, setSeverity] = useState("");
   const [moduleId, setModuleId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [signalsLoading, setSignalsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [syncingModules, setSyncingModules] = useState(false);
+  const [recomputingSignals, setRecomputingSignals] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const scanStartedRef = useRef(false);
+  const filtersMountedRef = useRef(false);
   const isModuleSyncRunning = syncingModules || moduleSync?.status === "running";
+  const isSignalRecomputeRunning = recomputingSignals || signalRecompute?.status === "running";
   const isScanning = loading || status?.status === "running";
 
   const severityOptions = useMemo(
@@ -145,18 +162,23 @@ function App() {
   );
 
   async function loadSignals() {
-    const params = new URLSearchParams({ limit: "10000" });
-    if (severity) params.set("severity", severity);
-    if (moduleId) params.set("module_id", moduleId);
-    const nextSignals = (await api.stockStatuses(params))
-      .sort((left, right) => {
-        const normalOrder = Number(left.severity === "normal") - Number(right.severity === "normal");
-        if (normalOrder !== 0) return normalOrder;
-        const dateOrder = (right.trade_date || "").localeCompare(left.trade_date || "");
-        if (dateOrder !== 0) return dateOrder;
-        return (right.id ?? 0) - (left.id ?? 0);
-      });
-    setSignals(nextSignals);
+    setSignalsLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: "10000" });
+      if (severity) params.set("severity", severity);
+      if (moduleId) params.set("module_id", moduleId);
+      const nextSignals = (await api.stockStatuses(params))
+        .sort((left, right) => {
+          const normalOrder = Number(left.severity === "normal") - Number(right.severity === "normal");
+          if (normalOrder !== 0) return normalOrder;
+          const dateOrder = (right.trade_date || "").localeCompare(left.trade_date || "");
+          if (dateOrder !== 0) return dateOrder;
+          return (right.id ?? 0) - (left.id ?? 0);
+        });
+      setSignals(nextSignals);
+    } finally {
+      setSignalsLoading(false);
+    }
   }
 
   async function loadStatus() {
@@ -170,6 +192,13 @@ function App() {
     return nextStatus;
   }
 
+  async function loadSignalRecomputeStatus() {
+    const nextStatus = await api.signalRecomputeStatus();
+    setSignalRecompute(nextStatus);
+    setRecomputingSignals(nextStatus.status === "running");
+    return nextStatus;
+  }
+
   async function loadConfig() {
     const data = await api.config();
     setConfig(data.thresholds);
@@ -179,17 +208,17 @@ function App() {
     setModules(await api.modules());
   }
 
-  async function loadHistory(symbol: string, range: HistoryRange = historyRange) {
+  const loadHistory = useCallback(async (symbol: string, range: HistoryRange = historyRange) => {
     setSelectedSymbol(symbol);
     setHistory(await api.history(symbol, range));
-  }
+  }, [historyRange]);
 
-  function changeHistoryRange(range: HistoryRange) {
+  const changeHistoryRange = useCallback((range: HistoryRange) => {
     setHistoryRange(range);
     if (selectedSymbol) {
       loadHistory(selectedSymbol, range);
     }
-  }
+  }, [loadHistory, selectedSymbol]);
 
   function showToast(message: string, tone: ToastState["tone"] = "info") {
     setToast({ message, tone });
@@ -200,7 +229,7 @@ function App() {
     setRefreshing(true);
     showToast("正在刷新数据...", "info");
     try {
-      const tasks: Array<Promise<unknown>> = [loadSignals(), loadStatus(), loadConfig(), loadModules(), loadModuleSyncStatus()];
+      const tasks: Array<Promise<unknown>> = [loadSignals(), loadStatus(), loadConfig(), loadModules(), loadModuleSyncStatus(), loadSignalRecomputeStatus()];
       if (selectedSymbol) tasks.push(loadHistory(selectedSymbol));
       await Promise.all(tasks);
       showToast("刷新完成", "success");
@@ -233,9 +262,33 @@ function App() {
     }
   }
 
+  async function runSignalRecompute() {
+    if (isSignalRecomputeRunning) return;
+    setRecomputingSignals(true);
+    showToast("正在后台重算进/离场信号...", "info");
+    try {
+      const result = await api.runSignalRecompute();
+      setSignalRecompute(result);
+      if (result.status === "running") {
+        showToast(result.message || "进/离场信号重算已在后台启动，请稍后刷新", "info");
+      } else if (result.status === "success") {
+        await Promise.all([loadSignals(), selectedSymbol ? loadHistory(selectedSymbol) : Promise.resolve()]);
+        showToast(result.message || `重算完成：${result.signal_count} 个进/离场点`, "success");
+      } else {
+        showToast(result.message || "进/离场信号重算失败", "error");
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? `进/离场信号重算失败：${error.message}` : "进/离场信号重算失败", "error");
+    } finally {
+      await loadSignalRecomputeStatus();
+      setRecomputingSignals(false);
+    }
+  }
+
   async function runScan() {
     if (isScanning) return;
     setLoading(true);
+    scanStartedRef.current = true;
     setStatus((current) => ({
       id: current?.id ?? 0,
       started_at: current?.started_at ?? new Date().toISOString(),
@@ -255,6 +308,7 @@ function App() {
         showToast(result.message || "扫描失败", "error");
       }
     } catch (error) {
+      scanStartedRef.current = false;
       showToast(error instanceof Error ? `扫描失败：${error.message}` : "扫描失败", "error");
     } finally {
       setLoading(false);
@@ -265,6 +319,7 @@ function App() {
     loadConfig();
     loadStatus();
     loadModuleSyncStatus();
+    loadSignalRecomputeStatus();
     loadModules();
     loadSignals();
   }, []);
@@ -301,40 +356,75 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (status?.status !== "running") return;
-
-    let cancelled = false;
-    const pollScanStatus = async () => {
-      try {
-        const nextStatus = await api.scanStatus();
-        if (cancelled || !nextStatus) return;
-        setStatus(nextStatus);
-        if (nextStatus.status !== "running") {
-          const tasks: Array<Promise<unknown>> = [loadSignals(), loadModules()];
-          if (selectedSymbol) tasks.push(loadHistory(selectedSymbol, historyRange));
-          await Promise.all(tasks);
-          if (nextStatus.status === "success") {
-            showToast(`扫描完成：${nextStatus.scanned_count} 只，新增 ${nextStatus.signal_count} 条`, "success");
-          } else if (nextStatus.status === "failed") {
-            showToast(nextStatus.message || "扫描失败", "error");
-          }
-        }
-      } catch (error) {
-        if (!cancelled) {
-          showToast(error instanceof Error ? `扫描进度刷新失败：${error.message}` : "扫描进度刷新失败", "error");
-        }
+    let lastTerminalStatus = "";
+    const socket = new WebSocket(signalRecomputeSocketUrl());
+    socket.onmessage = async (event) => {
+      const nextStatus = JSON.parse(event.data) as SignalRecomputeStatus;
+      setSignalRecompute(nextStatus);
+      setRecomputingSignals(nextStatus.status === "running");
+      if (nextStatus.status === "success" && lastTerminalStatus !== "success") {
+        lastTerminalStatus = "success";
+        await Promise.all([loadSignals(), selectedSymbol ? loadHistory(selectedSymbol, historyRange) : Promise.resolve()]);
+        showToast(nextStatus.message || "进/离场信号重算完成", "success");
+      }
+      if (nextStatus.status === "failed" && lastTerminalStatus !== "failed") {
+        lastTerminalStatus = "failed";
+        showToast(nextStatus.message || "进/离场信号重算失败", "error");
+      }
+      if (nextStatus.status === "running") {
+        lastTerminalStatus = "";
       }
     };
-
-    pollScanStatus();
-    const intervalId = window.setInterval(pollScanStatus, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
+    socket.onerror = () => {
+      socket.close();
     };
-  }, [status?.status, selectedSymbol, historyRange]);
+    return () => socket.close();
+  }, [selectedSymbol, historyRange, loadHistory]);
 
   useEffect(() => {
+    let cancelled = false;
+    let lastTerminalStatus = "";
+    let sawRunningStatus = false;
+    const socket = new WebSocket(scanStatusSocketUrl());
+    socket.onmessage = async (event) => {
+      const nextStatus = JSON.parse(event.data) as ScanStatus | null;
+      if (cancelled || !nextStatus) return;
+      setStatus(nextStatus);
+      if (nextStatus.status === "running") {
+        sawRunningStatus = true;
+        lastTerminalStatus = "";
+        return;
+      }
+      if (!sawRunningStatus && !scanStartedRef.current) {
+        lastTerminalStatus = nextStatus.status;
+        return;
+      }
+      if (lastTerminalStatus === nextStatus.status) return;
+      lastTerminalStatus = nextStatus.status;
+      scanStartedRef.current = false;
+      const tasks: Array<Promise<unknown>> = [loadSignals(), loadModules()];
+      if (selectedSymbol) tasks.push(loadHistory(selectedSymbol, historyRange));
+      await Promise.all(tasks);
+      if (nextStatus.status === "success") {
+        showToast(`扫描完成：${nextStatus.scanned_count} 只，新增 ${nextStatus.signal_count} 条`, "success");
+      } else if (nextStatus.status === "failed") {
+        showToast(nextStatus.message || "扫描失败", "error");
+      }
+    };
+    socket.onerror = () => {
+      socket.close();
+    };
+    return () => {
+      cancelled = true;
+      socket.close();
+    };
+  }, [selectedSymbol, historyRange]);
+
+  useEffect(() => {
+    if (!filtersMountedRef.current) {
+      filtersMountedRef.current = true;
+      return;
+    }
     loadSignals();
   }, [severity, moduleId]);
 
@@ -353,6 +443,10 @@ function App() {
           <button type="button" onClick={runModuleSync} disabled={isModuleSyncRunning} title="更新概念模块">
             {isModuleSyncRunning ? <RefreshCw className="spin" size={16} /> : <Layers size={16} />}
             {isModuleSyncRunning ? "更新中" : "更新模块"}
+          </button>
+          <button type="button" onClick={runSignalRecompute} disabled={isSignalRecomputeRunning} title="基于已有K线重算进/离场信号">
+            {isSignalRecomputeRunning ? <RefreshCw className="spin" size={16} /> : <Wand2 size={16} />}
+            {isSignalRecomputeRunning ? "重算中" : "重算进/离场"}
           </button>
           <button
             type="button"
@@ -403,6 +497,17 @@ function App() {
         </section>
       ) : null}
 
+      {signalRecompute?.message || signalRecompute?.status === "running" ? (
+        <section className={`module-sync-log signal-recompute-log ${signalRecompute?.status || "idle"}`}>
+          <strong>进/离场重算</strong>
+          <span>
+            {signalRecompute?.status === "running"
+              ? `${signalRecompute.processed_symbols}/${signalRecompute.total_symbols}，${signalRecompute.signal_count} 个点`
+              : signalRecompute?.message}
+          </span>
+        </section>
+      ) : null}
+
       <section className="filters">
         <div className="filter-title">
           <Filter size={15} />
@@ -426,14 +531,30 @@ function App() {
       </section>
 
       <section className="workspace">
-        <SignalTable signals={signals} selectedSymbol={selectedSymbol} updatedAt={status?.finished_at || status?.started_at} onSelectSymbol={loadHistory} />
-        <KLineChart history={history} range={historyRange} onRangeChange={changeHistoryRange} />
+        <div className="signal-table-wrap">
+          <SignalTable signals={signals} selectedSymbol={selectedSymbol} updatedAt={status?.finished_at || status?.started_at} onSelectSymbol={loadHistory} />
+          {signalsLoading ? (
+            <div className="table-loading" role="status" aria-live="polite">
+              <RefreshCw className="spin" size={18} />
+              <span>正在加载股票状态...</span>
+            </div>
+          ) : null}
+        </div>
+        {history ? (
+          <Suspense fallback={<div className="panel chart-panel empty-chart"><span>正在加载图表...</span></div>}>
+            <KLineChart history={history} range={historyRange} onRangeChange={changeHistoryRange} />
+          </Suspense>
+        ) : (
+          <div className="panel chart-panel empty-chart">
+            <span>选择股票后显示图表</span>
+          </div>
+        )}
       </section>
 
       <section className="panel config-panel">
         <div className="panel-title">可调算法项</div>
         <div className="config-grid">
-          {config.map((item) => (
+          {config.filter((item) => item.key !== "pullback_volume_shrink_ratio").map((item) => (
             <div className={`config-item ${item.key === "break_tolerance_pct" ? "highlight-config" : ""}`} key={item.key}>
               <strong>{item.label || item.key}</strong>
               <span>{formatConfigValue(item)} / {item.unit}</span>

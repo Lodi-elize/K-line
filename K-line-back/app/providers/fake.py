@@ -20,6 +20,7 @@ class FakeMarketDataProvider(MarketDataProvider):
         base = 10.0 if symbol.startswith("6") else 25.0
         direction = 0.16 if symbol.startswith("6") else -0.12
         rows: list[KLine] = []
+        previous_close: float | None = None
         for index in range(limit):
             if symbol.startswith("6") and index >= limit - 3:
                 setup_closes = [11.0, 12.1, 10.55]
@@ -39,8 +40,10 @@ class FakeMarketDataProvider(MarketDataProvider):
                     low=round(low, 2),
                     close=close,
                     volume=volume,
+                    change_pct=round((close - previous_close) / previous_close, 6) if previous_close else None,
                 )
             )
+            previous_close = close
         return rows
 
     def intraday_bars(self, symbol: str, limit: int = 240, trade_date: str | None = None) -> list[KLine]:
@@ -48,6 +51,7 @@ class FakeMarketDataProvider(MarketDataProvider):
         day = trade_date or "2026-02-28"
         start = datetime.fromisoformat(f"{day[:10]} 09:30")
         rows: list[KLine] = []
+        previous_close: float | None = None
         for index in range(min(limit, 240)):
             timestamp = start + timedelta(minutes=index)
             close = round(base + 0.01 * index + (0.03 if index % 17 == 0 else 0), 2)
@@ -60,6 +64,8 @@ class FakeMarketDataProvider(MarketDataProvider):
                     low=round(close - 0.05, 2),
                     close=close,
                     volume=1000 + index,
+                    change_pct=round((close - previous_close) / previous_close, 6) if previous_close else None,
                 )
             )
+            previous_close = close
         return rows

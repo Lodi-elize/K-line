@@ -11,11 +11,11 @@ services:
     volumes:
       - kline_data:/app/data
     ports:
-      - "${BACKEND_PORT:-8001}:8000"
+      - "${BACKEND_PORT:-9091}:9091"
     expose:
-      - "8000"
+      - "9091"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9091/api/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
