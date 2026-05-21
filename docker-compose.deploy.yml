@@ -10,6 +10,7 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - kline_data:/app/data
+      - mootdx_config:/root/.mootdx
     ports:
       - "${BACKEND_PORT:-9091}:9091"
     expose:
@@ -35,3 +36,4 @@ services:
 
 volumes:
   kline_data:
+  mootdx_config:

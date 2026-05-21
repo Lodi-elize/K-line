@@ -7,6 +7,9 @@ K-line-web/node_modules/
 K-line-web/dist/
 K-line-web/tsconfig.tsbuildinfo
 
+Krons/
+*.tar
+
 .env
 .env.*
 !.env.example

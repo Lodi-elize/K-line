@@ -15,9 +15,12 @@ RUN pip install \
     -r requirements.txt
 
 COPY app ./app
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /root/.mootdx \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 9091
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9091"]
