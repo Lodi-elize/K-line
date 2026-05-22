@@ -411,7 +411,7 @@ def sync_concept_modules() -> None:
 
 def start_scheduler() -> None:
     if scheduler and not scheduler.running:
-        scheduler.add_job(scanner.run_scan, "cron", day_of_week="mon-fri", hour=18, minute=0, id="daily_scan", replace_existing=True)
+        scheduler.add_job(scanner.run_scan, "cron", hour=22, minute=0, id="daily_scan", replace_existing=True)
         scheduler.start()
 
 

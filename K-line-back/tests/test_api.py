@@ -46,6 +46,7 @@ def test_health_and_config() -> None:
     assert client.get("/api/health").json() == {"status": "ok"}
     config = client.get("/api/config").json()
     assert config["thresholds"]
+    assert config["scan_cron"] == "0 22 * * *"
 
 
 def test_mootdx_provider_keeps_symbol_from_own_market() -> None:

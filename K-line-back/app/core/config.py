@@ -149,7 +149,7 @@ class Settings:
     app_name: str = "K-line MA Signal Scanner"
     database_path: Path = Path("data/kline.db")
     database_url: str | None = os.getenv("KLINE_DATABASE_URL") or None
-    scan_cron: str = "0 18 * * 1-5"
+    scan_cron: str = "0 22 * * *"
     max_scan_symbols: int | None = None
     sync_concept_modules: bool = (os.getenv("KLINE_SYNC_CONCEPTS") or "").lower() in {"1", "true", "yes", "on"}
     thresholds: SignalThresholds = field(default_factory=SignalThresholds)
